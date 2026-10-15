@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # The website alone doesn't need the macOS build.
+    paths-ignore: ['docs/**']
   pull_request:
+    paths-ignore: ['docs/**']
 
 env:
   CARGO_TERM_COLOR: always
