@@ -25,7 +25,7 @@ make fixtures    # once: test audio generated with the macOS voices
 - `make fixtures` needs the Romanian voice "Ioana": System Settings → Accessibility → Spoken
   Content → System Voice → Manage Voices… The generated files are gitignored, because the macOS
   license doesn't allow redistributing system-voice audio.
-- The first recording downloads the speech model (574 MB) to
+- The first launch downloads the speech model (574 MB) to
   `~/Library/Application Support/ExplainIt/models/`.
 
 ## Development loop
@@ -158,6 +158,16 @@ certificate in your keychain.
    - writes `dist/ExplainIt-<version>.zip` and prints its SHA-256
 4. **Tag and publish:** `git tag v<version> && git push --tags`, then
    `gh release create v<version> dist/ExplainIt-<version>.zip`.
+
+## The website
+
+`docs/` is the landing page, served by GitHub Pages from the `docs/` folder on `main`. It's one
+static `index.html` with inline CSS and JavaScript and no build step: open it in a browser to
+preview it. `og.png` is the 1200×630 image shown when the link is shared. Pushes that only change
+`docs/` skip CI.
+
+The page repeats the shortcuts, requirements and install steps from the README, so update both
+together.
 
 ## Reporting bugs
 

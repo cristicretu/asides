@@ -64,7 +64,8 @@ changes.
 - **Don't add permissions** (Accessibility, Input Monitoring, Screen Recording) without the
   maintainer's agreement.
 - **Keep the docs in sync.** Update the README (user-facing), ARCHITECTURE.md (structure,
-  invariants) and CONTRIBUTING.md (workflow) when your change affects them.
+  invariants) and CONTRIBUTING.md (workflow) when your change affects them. The website
+  (`docs/index.html`) repeats the shortcuts, requirements and install steps.
 
 ## What you can and can't verify
 

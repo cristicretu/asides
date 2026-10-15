@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>explainit · Talk through bugs while you test</title>
+<meta name="description" content="A macOS menu-bar app. Press a shortcut, say what's wrong, and it's transcribed on your Mac into a Markdown note in your repo, screenshots inline.">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#ffffff">
+<link rel="canonical" href="https://mihaicristianfarcas.github.io/explainit/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mihaicristianfarcas.github.io/explainit/">
+<meta property="og:title" content="explainit">
+<meta property="og:description" content="Talk through bugs while you test. Transcribed on your Mac into a Markdown note in your repo.">
+<meta property="og:image" content="https://mihaicristianfarcas.github.io/explainit/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root {
+  --ink: #000;
+  --body: #424245;
+  --muted: #6e6e73;
+  --line: #e5e5ea;
+  --wash: #f5f5f7;
+  --paper: #fff;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 17px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: var(--ink); color: var(--paper); }
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 6px; }
+h1, h2, h3, p { margin: 0; }
+code, pre, kbd { font-family: var(--mono); }
+
+.wrap { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 24px; }
+
+kbd {
+  display: inline-block;
+  padding: 0 0.4em;
+  font: 500 0.82em/1.6 var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  white-space: nowrap;
+  transition: transform 120ms ease-out, background-color 120ms ease-out, color 120ms ease-out;
+}
+kbd.pressed { transform: translateY(1px) scale(0.96); background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+/* Header */
+.top { display: flex; align-items: center; justify-content: space-between; height: 72px; font-size: 15px; }
+.mark { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: -0.01em; text-decoration: none; }
+.mark svg { width: 20px; height: 20px; }
+.nav { color: var(--muted); text-decoration: none; transition: color 150ms ease; }
+
+/* Hero */
+.hero { padding-top: 64px; padding-bottom: 56px; }
+h1 {
+  font-size: clamp(2.75rem, 8.5vw, 4.75rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+.lede { margin-top: 28px; max-width: 34em; font-size: 1.2rem; line-height: 1.5; color: var(--body); text-wrap: pretty; }
+.lede kbd { font-size: 0.8em; }
+.cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; margin-top: 36px; }
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 22px;
+  font-weight: 500;
+  font-size: 16px;
+  color: var(--paper);
+  background: var(--ink);
+  border-radius: 999px;
+  text-decoration: none;
+  transition: transform 160ms ease-out, background-color 150ms ease;
+}
+.button svg { width: 16px; height: 16px; }
+.button:active { transform: scale(0.97); }
+.more { font-size: 16px; font-weight: 500; text-decoration: none; }
+.more span { display: inline-block; transition: transform 200ms var(--ease-out); }
+.fine { margin-top: 20px; font-size: 14px; color: var(--muted); text-wrap: balance; }
+
+/* Demo */
+.demo { padding-bottom: 88px; }
+.screen { margin: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--paper); }
+.menubar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  background: var(--wash);
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.status { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border-radius: 5px; font-weight: 500; }
+.status svg { display: none; width: 16px; height: 16px; }
+.status[data-state="idle"] .i-idle,
+.status[data-state="rec"] .i-rec,
+.status[data-state="busy"] .i-busy,
+.status[data-state="done"] .i-done { display: block; }
+.status[data-state="rec"] .i-rec .dot { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+.clock { color: var(--body); }
+.file { padding: 14px 20px 22px; }
+.path {
+  margin-bottom: 16px;
+  font: 12px/1.4 var(--sans);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.note { font: 13.5px/1.6 var(--mono); overflow-wrap: anywhere; }
+.note p + p { margin-top: 0.8em; }
+.note .entry { margin-top: 1.6em; }
+.note .h { font-weight: 600; }
+.note .old { color: var(--muted); }
+.note .img { color: var(--muted); }
+.note .img b { font-weight: inherit; color: var(--ink); }
+.entry > p { transition: opacity 420ms var(--ease-out), transform 420ms var(--ease-out), filter 420ms var(--ease-out); }
+.entry.hidden > p { opacity: 0; transform: translateY(6px); filter: blur(2px); transition: none; }
+
+.caption { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-top: 16px; min-height: 3em; font-size: 15px; line-height: 1.5; color: var(--body); }
+.say { transition: opacity 180ms ease, filter 180ms ease; text-wrap: pretty; }
+.say.swap { opacity: 0; filter: blur(2px); }
+.say .w { transition: opacity 160ms ease; }
+.say .w.off { opacity: 0; }
+.say .q { color: var(--ink); }
+.replay {
+  flex: none;
+  padding: 0;
+  font: inherit;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 150ms ease, opacity 200ms ease;
+}
+.replay[hidden] { display: block; visibility: hidden; opacity: 0; }
+
+/* Features */
+.features { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 36px 40px; padding-bottom: 96px; }
+.feature { padding-top: 16px; border-top: 1px solid var(--ink); }
+.feature h3 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.feature p { margin-top: 6px; color: var(--body); font-size: 16px; text-wrap: pretty; }
+.feature code { font-size: 0.88em; }
+
+/* Install */
+.install { padding-bottom: 96px; }
+h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
+.steps { margin: 28px 0 0; padding: 0; list-style: none; counter-reset: step; }
+.steps li { position: relative; padding-left: 40px; counter-increment: step; }
+.steps li + li { margin-top: 28px; }
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 24px;
+  height: 24px;
+  font: 600 13px/24px var(--sans);
+  text-align: center;
+  color: var(--paper);
+  background: var(--ink);
+  border-radius: 50%;
+}
+.steps p { color: var(--body); text-wrap: pretty; }
+.steps a { color: var(--ink); font-weight: 500; }
+.steps code { font-size: 0.88em; color: var(--ink); }
+.code { position: relative; margin-top: 12px; background: var(--wash); border-radius: 10px; }
+.code pre { margin: 0; padding: 14px 76px 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.6; }
+.copy {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  height: 28px;
+  padding: 0 10px;
+  font: 500 13px/1 var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: transform 160ms ease-out, border-color 150ms ease;
+}
+.copy:active { transform: scale(0.97); }
+.after { margin-top: 28px; font-size: 15px; color: var(--muted); }
+.after a { color: var(--ink); }
+.after code { font-size: 0.9em; color: var(--ink); }
+
+.keys { display: grid; grid-template-columns: max-content 1fr; gap: 12px 24px; margin: 44px 0 0; font-size: 16px; }
+.keys dd { margin: 0; color: var(--body); }
+
+/* Footer */
+.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; padding: 24px 0 48px; font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); }
+.foot a { color: var(--ink); text-decoration: none; }
+
+@media (hover: hover) and (pointer: fine) {
+  .nav:hover, .replay:hover { color: var(--ink); }
+  .button:hover { background: #2c2c2e; }
+  .more:hover span { transform: translateX(3px); }
+  .copy:hover { border-color: #c7c7cc; }
+  .foot a:hover { text-decoration: underline; }
+}
+
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  .wrap { padding: 0 20px; }
+  .top { height: 60px; }
+  .hero { padding-top: 40px; padding-bottom: 44px; }
+  .lede { font-size: 1.1rem; }
+  .demo { padding-bottom: 64px; }
+  .file { padding: 12px 14px 18px; }
+  .note { font-size: 12.5px; }
+  .features { grid-template-columns: 1fr; gap: 28px; padding-bottom: 72px; }
+  .install { padding-bottom: 72px; }
+  .keys { gap: 10px 16px; font-size: 15px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entry > p, .entry.hidden > p { transform: none; filter: none; }
+  .status[data-state="rec"] .i-rec .dot { animation: none; }
+  .more span, kbd { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="wrap top">
+  <a class="mark" href="./">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></svg>
+    explainit
+  </a>
+  <a class="nav" href="https://github.com/mihaicristianfarcas/explainit">GitHub</a>
+</header>
+
+<main>
+  <section class="wrap hero">
+    <h1>Talk through bugs while you test.</h1>
+    <p class="lede">Press <kbd>⌃⌥Space</kbd> and say what's wrong. explainit transcribes it on your Mac and appends it to a Markdown note in your repo, screenshots inline, ready for a colleague or a coding agent.</p>
+    <div class="cta">
+      <a class="button" href="https://github.com/mihaicristianfarcas/explainit/releases/latest">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8.5M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg>
+        Download for Mac
+      </a>
+      <a class="more" href="#install">How to install <span aria-hidden="true">→</span></a>
+    </div>
+    <p class="fine">Free and open&nbsp;source · macOS&nbsp;14 or&nbsp;later · Apple&nbsp;silicon</p>
+  </section>
+
+  <section class="wrap demo" aria-label="Example: one recording">
+    <figure class="screen" id="demo">
+      <div class="menubar" aria-hidden="true">
+        <span class="status" data-state="done">
+          <svg class="i-idle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></svg>
+          <svg class="i-rec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle class="dot" cx="12" cy="12" r="5" fill="currentColor" stroke="none"/></svg>
+          <svg class="i-busy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><g fill="currentColor" stroke="none"><circle cx="7.75" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="16.25" cy="12" r="1.4"/></g></svg>
+          <svg class="i-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.75 2.75L16.25 9.5"/></svg>
+          <span class="status-title">#5</span>
+        </span>
+        <span class="clock">Wed 15 Oct 14:38</span>
+      </div>
+      <div class="file">
+        <div class="path">~/code/shop/.explainit/2026-10-15-1432 Checkout session/notes.md</div>
+        <div class="note">
+          <p class="old h">## 4 · 14:35</p>
+          <p class="old">The total doesn't update after removing the coupon.</p>
+          <div class="entry">
+            <p class="h">## 5 · 14:38</p>
+            <p>The summary card needs more padding under the sticky header.</p>
+            <p class="img">![<b>14:38:51</b>](images/05-143851.png)</p>
+            <p>And on mobile, the Pay button text wraps.</p>
+          </div>
+        </div>
+      </div>
+    </figure>
+    <div class="caption">
+      <p class="say" aria-live="polite">Seconds later, it's in the note as #5. Keep testing.</p>
+      <button class="replay" type="button" hidden>Replay</button>
+    </div>
+  </section>
+
+  <section class="wrap features" aria-label="Features">
+    <div class="feature">
+      <h3>Local and free</h3>
+      <p>Whisper runs on your Mac's GPU. No account, no API key, and no audio leaves your Mac.</p>
+    </div>
+    <div class="feature">
+      <h3>Verbatim</h3>
+      <p>What you said, as Whisper heard it. No rewriting, no summaries.</p>
+    </div>
+    <div class="feature">
+      <h3>Screenshots in place</h3>
+      <p>Copy a screenshot while you talk, and it lands next to the sentence you were saying.</p>
+    </div>
+    <div class="feature">
+      <h3>Any language</h3>
+      <p>Detected for each recording. List the languages you speak, and it picks between those.</p>
+    </div>
+    <div class="feature">
+      <h3>Context included</h3>
+      <p>Each new note records the branch, commit and uncommitted changes, plus your browser and display.</p>
+    </div>
+    <div class="feature">
+      <h3>Ready for agents</h3>
+      <p>Plain Markdown in your repo. <code>explainit path</code> prints the latest note for your agent.</p>
+    </div>
+  </section>
+
+  <section class="wrap install" id="install">
+    <h2>Install</h2>
+    <ol class="steps">
+      <li>
+        <p><a href="https://github.com/mihaicristianfarcas/explainit/releases/latest">Download ExplainIt</a>, unzip it and move it to Applications. It's signed and notarized by Apple.</p>
+      </li>
+      <li>
+        <p>Link the command that ships inside it, and make sure <code>~/.local/bin</code> is on your <code>PATH</code>.</p>
+        <div class="code"><pre><code>mkdir -p ~/.local/bin
+ln -s /Applications/ExplainIt.app/Contents/Helpers/explainit \
+  ~/.local/bin/explainit</code></pre><button class="copy" type="button" hidden>Copy</button></div>
+      </li>
+      <li>
+        <p>Run it in your project. The first launch asks for the microphone and downloads the speech model (574 MB).</p>
+        <div class="code"><pre><code>cd ~/code/shop &amp;&amp; explainit</code></pre><button class="copy" type="button" hidden>Copy</button></div>
+      </li>
+    </ol>
+    <dl class="keys">
+      <dt><kbd>⌃⌥Space</kbd></dt><dd>Record, then stop. Or hold while you talk.</dd>
+      <dt><kbd>⌃⌥N</kbd></dt><dd>Record into a new note.</dd>
+      <dt><kbd>⌃⌥V</kbd></dt><dd>Attach the image on the clipboard.</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Cancel. Nothing is written.</dd>
+    </dl>
+    <p class="after">Or <a href="https://github.com/mihaicristianfarcas/explainit#from-source">build it from source</a> with <code>make install</code>.</p>
+  </section>
+</main>
+
+<footer class="wrap">
+  <div class="foot">
+    <span>MIT or Apache-2.0 · by <a href="https://github.com/mihaicristianfarcas">Mihai-Cristian Farcaș</a></span>
+    <a href="https://github.com/mihaicristianfarcas/explainit">Source on GitHub</a>
+  </div>
+</footer>
+
+<script>
+(() => {
+  // Copy buttons only appear where the clipboard API works.
+  if (navigator.clipboard && window.isSecureContext) {
+    for (const button of document.querySelectorAll('.copy')) {
+      button.hidden = false;
+      let reset;
+      button.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(button.previousElementSibling.textContent);
+          button.textContent = 'Copied';
+        } catch {
+          button.textContent = 'Press ⌘C';
+        }
+        clearTimeout(reset);
+        reset = setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+      });
+    }
+  }
+
+  // The demo: the markup is the finished state, so it reads fine without JavaScript.
+  const screen = document.getElementById('demo');
+  const status = screen.querySelector('.status');
+  const title = screen.querySelector('.status-title');
+  const entry = screen.querySelector('.entry');
+  const say = document.querySelector('.say');
+  const replay = document.querySelector('.replay');
+  const finalCaption = say.innerHTML;
+  const sentences = [
+    'The summary card needs more padding under the sticky header.',
+    'And on mobile, the Pay button text wraps.',
+  ];
+
+  let run = 0;
+  let timer;
+
+  const wait = (ms, id) => new Promise((resolve, reject) =>
+    setTimeout(() => (id === run ? resolve() : reject()), ms));
+
+  function show(state, text) {
+    status.dataset.state = state;
+    title.textContent = text;
+  }
+
+  async function caption(html, id) {
+    say.classList.add('swap');
+    await wait(180, id);
+    say.innerHTML = html;
+    say.classList.remove('swap');
+  }
+
+  async function press(id) {
+    const key = say.querySelector('kbd');
+    if (!key) return;
+    key.classList.add('pressed');
+    await wait(160, id);
+    key.classList.remove('pressed');
+  }
+
+  async function speak(sentence, id) {
+    const words = sentence.split(' ');
+    const spans = words.map((w, i) =>
+      `<span class="w off">${i === 0 ? '\u201C' : ''}${w}${i === words.length - 1 ? '\u201D' : ''}</span>`);
+    await caption(`<span class="q">${spans.join(' ')}</span>`, id);
+    for (const word of say.querySelectorAll('.w')) {
+      await wait(150, id);
+      word.classList.remove('off');
+    }
+  }
+
+  async function play() {
+    const id = ++run;
+    clearInterval(timer);
+    replay.hidden = true;
+    entry.classList.add('hidden');
+    show('idle', '');
+    try {
+      await caption('Notice a bug. Press <kbd>⌃⌥Space</kbd>.', id);
+      await wait(1100, id);
+      await press(id);
+
+      const start = Date.now();
+      show('rec', '0:00');
+      timer = setInterval(() => {
+        const s = Math.floor((Date.now() - start) / 1000);
+        title.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+      }, 200);
+      await speak(sentences[0], id);
+      await wait(700, id);
+      await caption('<kbd>⌃⇧⌘4</kbd> Screenshot copied while you talk.', id);
+      await wait(1200, id);
+      await speak(sentences[1], id);
+      await wait(700, id);
+      await caption('<kbd>⌃⌥Space</kbd> again to stop.', id);
+      await wait(250, id);
+      await press(id);
+
+      clearInterval(timer);
+      show('busy', '');
+      await caption('Transcribing on your Mac…', id);
+      await wait(1000, id);
+
+      show('done', '#5');
+      entry.querySelectorAll('p').forEach((p, i) => { p.style.transitionDelay = `${i * 70}ms`; });
+      entry.getBoundingClientRect();
+      entry.classList.remove('hidden');
+      await caption(finalCaption, id);
+      await wait(600, id);
+      replay.hidden = false;
+    } catch {
+      // A newer run took over.
+    }
+  }
+
+  replay.addEventListener('click', play);
+
+  // Play once, when the demo is mostly on screen.
+  if ('IntersectionObserver' in window) {
+    const seen = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) { seen.disconnect(); play(); }
+    }, { threshold: 0.6 });
+    seen.observe(screen);
+  } else {
+    replay.hidden = false;
+  }
+})();
+</script>
+</body>
+</html>

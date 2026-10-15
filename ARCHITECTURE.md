@@ -58,6 +58,7 @@ crates/
 packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL scheme
 packaging/ExplainIt.entitlements   microphone entitlement (required by the hardened runtime)
 scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh, release.sh
+docs/                 the website (GitHub Pages): index.html, favicon.svg, og.png
 ```
 
 ## Threads and how they talk
