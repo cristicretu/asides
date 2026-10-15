@@ -144,6 +144,7 @@ mod tests {
             assert_eq!(reddish > opaque / 2, red, "{name}: color");
             // EXPLAINIT_ICON_DUMP=<dir> writes the raw pixels for visual inspection.
             if let Some(dir) = std::env::var_os("EXPLAINIT_ICON_DUMP") {
+                std::fs::create_dir_all(&dir).unwrap();
                 std::fs::write(std::path::Path::new(&dir).join(format!("{name}-{w}x{h}.rgba")), &rgba).unwrap();
             }
         }

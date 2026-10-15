@@ -197,31 +197,17 @@ more reliable; a single entry skips detection altogether.
 - **One language per recording.** Whisper detects the language once per recording. If you switch
   languages partway through, it can drop the part in the other language.
 
-## Develop
+## Contributing
+
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the development loop,
+tests (including a manual QA checklist) and pull requests. [ARCHITECTURE.md](ARCHITECTURE.md)
+explains how the CLI, the app and its threads fit together, and the invariants to keep. Coding
+agents follow [AGENTS.md](AGENTS.md); Claude Code loads it through `CLAUDE.md`.
 
 ```bash
-make test          # unit tests
-make fixtures      # generate test audio locally with the macOS voices
-                   # (needs the Romanian voice "Ioana": System Settings → Accessibility → Spoken Content)
-make test-speech   # transcription tests (need the model) and a real 190 MB model download
-make e2e           # install a build with test hooks and drive it through the CLI with the fixtures
+make test     # unit tests
+make e2e      # end-to-end through the CLI (run `make fixtures` once first)
 ```
-
-The test audio is generated rather than committed, because the macOS license only allows
-system-voice recordings for personal use.
-
-| Crate | |
-|---|---|
-| `explainit-core` | Notes, metadata, Markdown, git information, resampling, settings and links. No macOS dependencies. |
-| `explainit-cli` | The `explainit` command. |
-| `explainit-app` | The menu-bar app: tao, tray-icon, global-hotkey, cpal, whisper-rs and objc2. |
-
-Keep binary names unique ignoring case. On the default case-insensitive APFS volume,
-`target/release/explainit` and `target/release/ExplainIt` would be the same file. That's why the
-app binary is `explainit-app`, renamed to `ExplainIt` inside the bundle.
-
-Contributions are welcome. Please run `cargo fmt`, `cargo clippy --workspace --all-targets` and
-`make test` before opening a pull request.
 
 ## License
 
