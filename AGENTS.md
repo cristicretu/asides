@@ -27,6 +27,7 @@ It's a Rust workspace:
 | Speech tests | `make test-speech` (needs the model; also downloads 190 MB) |
 | Install | `make install` |
 | Test fixtures | `make fixtures` (needs the macOS voice "Ioana") |
+| Notarized release | `make release` (only when the maintainer asks; see Rules) |
 
 Run format, lint and unit tests after every change. Run `make e2e` when CLI or app behavior
 changes.
@@ -44,6 +45,8 @@ changes.
   (generated with macOS voices, which may not be redistributed), `target/` or `dist/`. They're
   gitignored; keep them that way.
 - **Never edit the user's notes** in `.explainit/`.
+- **Run `make release` only when the maintainer asks.** It uploads the build to Apple's notary
+  service and needs their stored notarytool credentials.
 - **Don't run `make cert`** unless asked. It changes the login keychain and prompts for a password.
 - **Keep the stable signing.** `make bundle` picks the identity with `scripts/signing-identity.sh`
   and signs with the hardened runtime. Don't fall back to ad hoc (the microphone permission would

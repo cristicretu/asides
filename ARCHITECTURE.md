@@ -42,7 +42,7 @@ crates/
     models.rs         Whisper model catalog (file names, sizes, SHA-256)
     resample.rs       windowed-sinc resampler to 16 kHz
     paths.rs          bundle ID, URL scheme, Application Support paths, tilde()
-  explainit-cli/
+  explainit-cli/      shipped inside the bundle as ExplainIt.app/Contents/Helpers/explainit
     main.rs           clap subcommands, `open -g -b <bundle id> <link>`, waits for the app to acknowledge
   explainit-app/      binary `explainit-app`, renamed ExplainIt inside the bundle
     main.rs           App: event loop, UserEvent dispatch, recording state machine, bind(), refresh(), publish()
@@ -57,7 +57,7 @@ crates/
     macos.rs          microphone permission, folder picker, sounds, open/reveal
 packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL scheme
 packaging/ExplainIt.entitlements   microphone entitlement (required by the hardened runtime)
-scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh
+scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh, release.sh
 ```
 
 ## Threads and how they talk

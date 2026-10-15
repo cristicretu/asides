@@ -139,6 +139,26 @@ in your pull request what you tried.
   The body explains why.
 - Fill in the pull request template: what changed, why, and how you tested it, including manual QA.
 
+## Releasing (maintainers)
+
+Releases are built locally and notarized by Apple. You need a "Developer ID Application"
+certificate in your keychain.
+
+1. **Store notary credentials once.** Create an app-specific password at
+   [account.apple.com](https://account.apple.com) (Sign-In and Security → App-Specific
+   Passwords), then run `xcrun notarytool store-credentials explainit-notary --apple-id <Apple ID>
+   --team-id <Team ID>`. To use another profile name, set `NOTARY_PROFILE`.
+2. **Set the version** in `Cargo.toml` (`[workspace.package] version`). The app's `Info.plist` picks
+   it up.
+3. **Run `make release`.** It:
+   - builds the app with the CLI inside (`Contents/Helpers/explainit`)
+   - signs both with the hardened runtime and a secure timestamp
+   - submits the build to Apple and waits; if Apple rejects it, the script prints the notary log
+   - staples the ticket and checks the result with Gatekeeper
+   - writes `dist/ExplainIt-<version>.zip` and prints its SHA-256
+4. **Tag and publish:** `git tag v<version> && git push --tags`, then
+   `gh release create v<version> dist/ExplainIt-<version>.zip`.
+
 ## Reporting bugs
 
 Use the bug report template. Include:

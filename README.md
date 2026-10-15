@@ -34,12 +34,26 @@ A few seconds later the transcript is in the note, and the menu-bar icon shows `
 
 ## Install
 
+### Prebuilt
+
+Download `ExplainIt-<version>.zip` from the
+[Releases page](https://github.com/mihaicristianfarcas/explainit/releases). Releases are signed and
+notarized by Apple. Unzip it, move `ExplainIt.app` to `/Applications`, and link the command that
+ships inside it:
+
 ```bash
-git clone https://github.com/mihaicristianfarcas/explainit && cd explainit
-make install   # ExplainIt.app → ~/Applications, the explainit command → ~/.local/bin
+mkdir -p ~/.local/bin
+ln -s /Applications/ExplainIt.app/Contents/Helpers/explainit ~/.local/bin/explainit
 ```
 
-Make sure `~/.local/bin` is on your `PATH`. On first launch, ExplainIt asks for microphone access
+### From source
+
+```bash
+git clone https://github.com/mihaicristianfarcas/explainit && cd explainit
+make install   # ExplainIt.app → ~/Applications, plus a link to its CLI in ~/.local/bin
+```
+
+Either way, make sure `~/.local/bin` is on your `PATH`. On first launch, ExplainIt asks for microphone access
 and downloads the speech model (574 MB, checksum-verified) to
 `~/Library/Application Support/ExplainIt/models/`.
 
