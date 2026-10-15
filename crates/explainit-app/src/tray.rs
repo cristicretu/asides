@@ -112,7 +112,7 @@ impl Tray {
             device_menu.append(item)?;
         }
         let microphone_settings = MenuItem::new("Microphone Permission…", true, None);
-        let edit_settings = MenuItem::new("Edit Shortcuts & Settings…", true, None);
+        let edit_settings = MenuItem::new(menu_text("Edit Shortcuts & Settings…"), true, None);
         let preferences = Submenu::new("Preferences", true);
         preferences.append_items(&[
             &hold,
