@@ -43,7 +43,7 @@ pub fn git_info(dir: &Path) -> Option<GitInfo> {
     })
 }
 
-/// Adds `.explainit/` to the repo's `.git/info/exclude` (a local-only ignore list that never
+/// Adds `.asides/` to the repo's `.git/info/exclude` (a local-only ignore list that never
 /// touches `.gitignore`). Returns `true` if the line was added.
 pub fn ensure_git_exclude(dir: &Path) -> io::Result<bool> {
     let Some(rel) = git(dir, &["rev-parse", "--git-path", "info/exclude"]) else {
@@ -63,7 +63,7 @@ pub fn ensure_git_exclude(dir: &Path) -> io::Result<bool> {
     }
     let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)?;
     let sep = if existing.is_empty() || existing.ends_with('\n') { "" } else { "\n" };
-    write!(file, "{sep}# explainit notes (local only)\n{pattern}\n")?;
+    write!(file, "{sep}# asides notes (local only)\n{pattern}\n")?;
     Ok(true)
 }
 
@@ -141,8 +141,8 @@ mod tests {
         let tmp = repo();
         assert!(ensure_git_exclude(tmp.path()).unwrap());
         assert!(!ensure_git_exclude(tmp.path()).unwrap());
-        fs::create_dir_all(tmp.path().join(".explainit/x")).unwrap();
-        fs::write(tmp.path().join(".explainit/x/notes.md"), "hi").unwrap();
+        fs::create_dir_all(tmp.path().join(".asides/x")).unwrap();
+        fs::write(tmp.path().join(".asides/x/notes.md"), "hi").unwrap();
         assert_eq!(git_info(tmp.path()).unwrap().uncommitted_files, 0);
     }
 }

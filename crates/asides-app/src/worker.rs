@@ -8,12 +8,12 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use asides_core::frontmatter::{self, Metadata};
+use asides_core::markdown::{self, Attachment};
+use asides_core::notes::{self, Note};
+use asides_core::project;
+use asides_core::resample::resample;
 use chrono::{DateTime, Local};
-use explainit_core::frontmatter::{self, Metadata};
-use explainit_core::markdown::{self, Attachment};
-use explainit_core::notes::{self, Note};
-use explainit_core::project;
-use explainit_core::resample::resample;
 
 use crate::environment::Environment;
 use crate::stt::{self, ModelManager, Transcriber};
@@ -67,7 +67,7 @@ pub enum Outcome {
 pub fn spawn(models: Arc<ModelManager>, done: impl Fn(Outcome) + Send + 'static) -> Sender<Job> {
     let (tx, rx) = mpsc::channel::<Job>();
     std::thread::Builder::new()
-        .name("explainit-worker".into())
+        .name("asides-worker".into())
         .spawn(move || {
             let mut transcriber: Option<Transcriber> = None;
             loop {
@@ -167,7 +167,7 @@ fn target_note(
         macos: environment.macos.clone(),
         browser: environment.browser.clone(),
         display: environment.display.clone(),
-        transcription: format!("explainit {} · whisper {model} (local)", env!("CARGO_PKG_VERSION")),
+        transcription: format!("asides {} · whisper {model} (local)", env!("CARGO_PKG_VERSION")),
     };
     notes::create_note(dir, created, &title, &frontmatter::render(&metadata)).context("could not create the note")
 }

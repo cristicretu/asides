@@ -1,6 +1,6 @@
 [package]
-name = "explainit-app"
-description = "ExplainIt: a macOS menu-bar app that turns spoken bug reports into Markdown notes, transcribed locally"
+name = "asides-app"
+description = "Asides: a macOS menu-bar app that turns spoken bug reports into Markdown notes, transcribed locally"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,15 +8,15 @@ repository.workspace = true
 publish = false
 
 [[bin]]
-name = "explainit-app"
+name = "asides-app"
 path = "src/main.rs"
 
 [features]
-# Enables `explainit simulate` (feed a WAV as if recorded). Used by the end-to-end test only.
+# Enables `asides simulate` (feed a WAV as if recorded). Used by the end-to-end test only.
 dev-hooks = []
 
 [dependencies]
-explainit-core.workspace = true
+asides-core.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 url.workspace = true

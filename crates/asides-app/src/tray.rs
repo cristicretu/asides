@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use explainit_core::config::{Config, pretty_shortcut};
-use explainit_core::models::MODELS;
-use explainit_core::paths::tilde;
+use asides_core::config::{Config, pretty_shortcut};
+use asides_core::models::MODELS;
+use asides_core::paths::tilde;
 use tray_icon::menu::accelerator::Accelerator;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{TrayIcon, TrayIconBuilder};
@@ -126,7 +126,7 @@ impl Tray {
             &microphone_settings,
             &edit_settings,
         ])?;
-        let quit = MenuItem::new("Quit ExplainIt", true, Accelerator::from_str("cmd+KeyQ").ok());
+        let quit = MenuItem::new("Quit Asides", true, Accelerator::from_str("cmd+KeyQ").ok());
 
         let menu = Menu::new();
         menu.append_items(&[
@@ -148,7 +148,7 @@ impl Tray {
         ])?;
 
         let builder =
-            TrayIconBuilder::new().with_menu(Box::new(menu)).with_menu_on_left_click(true).with_tooltip("ExplainIt");
+            TrayIconBuilder::new().with_menu(Box::new(menu)).with_menu_on_left_click(true).with_tooltip("Asides");
         let builder = if icon.template {
             builder.with_icon_templated(icon.icon.clone())
         } else {

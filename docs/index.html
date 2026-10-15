@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>explainit · Talk through bugs while you test</title>
+<title>asides · Talk through bugs while you test</title>
 <meta name="description" content="A macOS menu-bar app. Press a shortcut, say what's wrong, and it's transcribed on your Mac into a Markdown note in your repo, screenshots inline.">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#ffffff">
-<link rel="canonical" href="https://mihaicristianfarcas.github.io/explainit/">
+<link rel="canonical" href="https://mihaicristianfarcas.github.io/asides/">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://mihaicristianfarcas.github.io/explainit/">
-<meta property="og:title" content="explainit">
+<meta property="og:url" content="https://mihaicristianfarcas.github.io/asides/">
+<meta property="og:title" content="asides">
 <meta property="og:description" content="Talk through bugs while you test. Transcribed on your Mac into a Markdown note in your repo.">
-<meta property="og:image" content="https://mihaicristianfarcas.github.io/explainit/og.png">
+<meta property="og:image" content="https://mihaicristianfarcas.github.io/asides/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <style>
 :root {
@@ -277,17 +277,17 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
 <header class="wrap top">
   <a class="mark" href="./">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></svg>
-    explainit
+    asides
   </a>
-  <a class="nav" href="https://github.com/mihaicristianfarcas/explainit">GitHub</a>
+  <a class="nav" href="https://github.com/mihaicristianfarcas/asides">GitHub</a>
 </header>
 
 <main>
   <section class="wrap hero">
     <h1>Talk through bugs while you test.</h1>
-    <p class="lede">Press <kbd>⌃⌥Space</kbd> and say what's wrong. explainit transcribes it on your Mac and appends it to a Markdown note in your repo, screenshots inline, ready for a colleague or a coding agent.</p>
+    <p class="lede">Press <kbd>⌃⌥Space</kbd> and say what's wrong. asides transcribes it on your Mac and appends it to a Markdown note in your repo, screenshots inline, ready for a colleague or a coding agent.</p>
     <div class="cta">
-      <a class="button" href="https://github.com/mihaicristianfarcas/explainit/releases/latest">
+      <a class="button" href="https://github.com/mihaicristianfarcas/asides/releases/latest">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8.5M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg>
         Download for Mac
       </a>
@@ -319,7 +319,7 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
         </div>
       </div>
       <div class="file">
-        <div class="path">~/code/shop/.explainit/2026-10-15-1432 Checkout session/notes.md</div>
+        <div class="path">~/code/shop/.asides/2026-10-15-1432 Checkout session/notes.md</div>
         <div class="note">
           <p class="old h">## 4 · 14:35</p>
           <p class="old">The total doesn't update after removing the coupon.</p>
@@ -361,7 +361,7 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
     </div>
     <div class="feature">
       <h3>Ready for agents</h3>
-      <p>Plain Markdown in your repo. <code>explainit path</code> prints the latest note for your agent.</p>
+      <p>Plain Markdown in your repo. <code>asides path</code> prints the latest note for your agent.</p>
     </div>
   </section>
 
@@ -370,17 +370,17 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
     <ol class="steps">
       <li>
         <p>Install it with Homebrew. It's signed and notarized by Apple.</p>
-        <div class="code"><pre><code>brew tap mihaicristianfarcas/explainit \
-  https://github.com/mihaicristianfarcas/explainit
-brew install --cask mihaicristianfarcas/explainit/explainit</code></pre><button class="copy" type="button" hidden>Copy</button></div>
-        <p class="or">Or <a href="https://github.com/mihaicristianfarcas/explainit/releases/latest">download it</a>, move it to Applications, and link the command inside it into a folder on your <code>PATH</code>:</p>
+        <div class="code"><pre><code>brew tap mihaicristianfarcas/asides \
+  https://github.com/mihaicristianfarcas/asides
+brew install --cask mihaicristianfarcas/asides/asides</code></pre><button class="copy" type="button" hidden>Copy</button></div>
+        <p class="or">Or <a href="https://github.com/mihaicristianfarcas/asides/releases/latest">download it</a>, move it to Applications, and link the command inside it into a folder on your <code>PATH</code>:</p>
         <div class="code"><pre><code>mkdir -p ~/.local/bin
-ln -s /Applications/ExplainIt.app/Contents/Helpers/explainit \
-  ~/.local/bin/explainit</code></pre><button class="copy" type="button" hidden>Copy</button></div>
+ln -s /Applications/Asides.app/Contents/Helpers/asides \
+  ~/.local/bin/asides</code></pre><button class="copy" type="button" hidden>Copy</button></div>
       </li>
       <li>
         <p>Run it in your project. The first launch asks for the microphone and downloads the speech model (574 MB).</p>
-        <div class="code"><pre><code>cd ~/code/shop &amp;&amp; explainit</code></pre><button class="copy" type="button" hidden>Copy</button></div>
+        <div class="code"><pre><code>cd ~/code/shop &amp;&amp; asides</code></pre><button class="copy" type="button" hidden>Copy</button></div>
       </li>
     </ol>
     <dl class="keys">
@@ -389,14 +389,14 @@ ln -s /Applications/ExplainIt.app/Contents/Helpers/explainit \
       <dt><kbd>⌃⌥V</kbd></dt><dd>Attach the image on the clipboard.</dd>
       <dt><kbd>Esc</kbd></dt><dd>Cancel. Nothing is written.</dd>
     </dl>
-    <p class="after">Or <a href="https://github.com/mihaicristianfarcas/explainit#from-source">build it from source</a> with <code>make install</code>.</p>
+    <p class="after">Or <a href="https://github.com/mihaicristianfarcas/asides#from-source">build it from source</a> with <code>make install</code>.</p>
   </section>
 </main>
 
 <footer class="wrap">
   <div class="foot">
     <span>MIT or Apache-2.0 · by <a href="https://github.com/mihaicristianfarcas">Mihai-Cristian Farcaș</a></span>
-    <a href="https://github.com/mihaicristianfarcas/explainit">Source on GitHub</a>
+    <a href="https://github.com/mihaicristianfarcas/asides">Source on GitHub</a>
   </div>
 </footer>
 

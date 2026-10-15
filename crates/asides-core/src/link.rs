@@ -1,4 +1,4 @@
-//! `explainit://` links: how the CLI talks to the running menu-bar app (via `open`).
+//! `asides://` links: how the CLI talks to the running menu-bar app (via `open`).
 
 use std::path::PathBuf;
 
@@ -123,13 +123,13 @@ mod tests {
             image_at: 2.5,
             request: None,
         });
-        assert_eq!(Link::Quit.to_url(), "explainit://quit");
+        assert_eq!(Link::Quit.to_url(), "asides://quit");
     }
 
     #[test]
     fn rejects_foreign_links() {
         assert_eq!(Link::parse(&Url::parse("https://bind?dir=/x").unwrap()), None);
-        assert_eq!(Link::parse(&Url::parse("explainit://nope").unwrap()), None);
-        assert_eq!(Link::parse(&Url::parse("explainit://bind").unwrap()), None);
+        assert_eq!(Link::parse(&Url::parse("asides://nope").unwrap()), None);
+        assert_eq!(Link::parse(&Url::parse("asides://bind").unwrap()), None);
     }
 }

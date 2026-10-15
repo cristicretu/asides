@@ -8,8 +8,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use explainit_core::markdown::Segment;
-use explainit_core::models::ModelSpec;
+use asides_core::markdown::Segment;
+use asides_core::models::ModelSpec;
 use sha2::{Digest, Sha256};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -218,7 +218,7 @@ pub fn is_silent(pcm: &[f32]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use explainit_core::markdown::plain_text;
+    use asides_core::markdown::plain_text;
 
     fn fixture(name: &str) -> Vec<f32> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name);
@@ -249,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs the large-v3-turbo model in ~/Library/Application Support/ExplainIt/models"]
+    #[ignore = "needs the large-v3-turbo model in ~/Library/Application Support/Asides/models"]
     fn transcribes_romanian_and_english_verbatim() {
         let spec = ModelSpec::find("large-v3-turbo");
         let transcriber = Transcriber::load(spec.id, &spec.path()).unwrap();

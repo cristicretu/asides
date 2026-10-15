@@ -1,4 +1,4 @@
-//! Notes live in `<bound dir>/.explainit/<YYYY-MM-DD-HHMM Title>/notes.md`, one folder per note.
+//! Notes live in `<bound dir>/.asides/<YYYY-MM-DD-HHMM Title>/notes.md`, one folder per note.
 
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -233,7 +233,7 @@ mod tests {
         create_note(tmp.path(), at(11, 0), "Late-added older", "---\n---").unwrap();
         let latest = latest_note(tmp.path()).unwrap();
         assert_eq!(latest.title, "Checkout session");
-        assert!(latest.dir.ends_with(".explainit/2026-10-15-1432 Checkout session"));
+        assert!(latest.dir.ends_with(".asides/2026-10-15-1432 Checkout session"));
     }
 
     #[test]

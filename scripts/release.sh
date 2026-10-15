@@ -1,14 +1,14 @@
 #!/bin/bash
-# Builds ExplainIt.app (with the CLI inside), signs it with a Developer ID certificate and a secure
+# Builds Asides.app (with the CLI inside), signs it with a Developer ID certificate and a secure
 # timestamp, has Apple notarize it, staples the ticket and zips it for a GitHub release.
 #
 # One-time setup: store notarytool credentials under a profile name (an app-specific password from
 # account.apple.com), then run `make release`:
-#   xcrun notarytool store-credentials explainit-notary --apple-id <Apple ID> --team-id <Team ID>
+#   xcrun notarytool store-credentials asides-notary --apple-id <Apple ID> --team-id <Team ID>
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PROFILE="${NOTARY_PROFILE:-explainit-notary}"
+PROFILE="${NOTARY_PROFILE:-asides-notary}"
 IDENTITY="$(scripts/signing-identity.sh)"
 case "$IDENTITY" in
     "Developer ID Application: "*) ;;
@@ -24,8 +24,8 @@ fi
 
 make bundle TIMESTAMP=--timestamp SIGN_ID="$IDENTITY"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-APP=dist/ExplainIt.app
-ZIP="dist/ExplainIt-$VERSION.zip"
+APP=dist/Asides.app
+ZIP="dist/Asides-$VERSION.zip"
 
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
@@ -46,7 +46,7 @@ ditto -c -k --keepParent "$APP" "$ZIP"
 spctl --assess --type execute --verbose=2 "$APP"
 SHA=$(shasum -a 256 "$ZIP" | cut -d' ' -f1)
 # The Homebrew cask installs this exact zip from the GitHub release.
-sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/explainit.rb
+sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/asides.rb
 echo "SHA-256: $SHA"
 echo "Ready: $ZIP"
-echo "Updated Casks/explainit.rb; commit it after publishing the GitHub release."
+echo "Updated Casks/asides.rb; commit it after publishing the GitHub release."

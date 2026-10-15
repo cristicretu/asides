@@ -105,6 +105,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "asides-app"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "asides-core",
+ "block2",
+ "chrono",
+ "cpal",
+ "global-hotkey",
+ "hound",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-av-foundation",
+ "objc2-foundation",
+ "sha2",
+ "tao",
+ "tempfile",
+ "tray-icon",
+ "ureq",
+ "url",
+ "whisper-rs",
+]
+
+[[package]]
+name = "asides-cli"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "asides-core",
+ "clap",
+ "libc",
+]
+
+[[package]]
+name = "asides-core"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
+ "url",
+ "zip",
+]
+
+[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -612,53 +659,6 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "explainit-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "block2",
- "chrono",
- "cpal",
- "explainit-core",
- "global-hotkey",
- "hound",
- "objc2",
- "objc2-app-kit",
- "objc2-av-foundation",
- "objc2-foundation",
- "sha2",
- "tao",
- "tempfile",
- "tray-icon",
- "ureq",
- "url",
- "whisper-rs",
-]
-
-[[package]]
-name = "explainit-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "explainit-core",
- "libc",
-]
-
-[[package]]
-name = "explainit-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "tempfile",
- "toml 1.1.8+spec-1.1.0",
- "url",
- "zip",
 ]
 
 [[package]]

@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>ExplainIt</string>
+	<string>Asides</string>
 	<key>CFBundleDisplayName</key>
-	<string>ExplainIt</string>
+	<string>Asides</string>
 	<key>CFBundleIdentifier</key>
-	<string>io.github.mihaicristianfarcas.explainit</string>
+	<string>io.github.mihaicristianfarcas.asides</string>
 	<key>CFBundleExecutable</key>
-	<string>ExplainIt</string>
+	<string>Asides</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>
@@ -23,15 +23,15 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>ExplainIt records you while you describe a bug and transcribes it locally, on this Mac.</string>
+	<string>Asides records you while you describe a bug and transcribes it locally, on this Mac.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>io.github.mihaicristianfarcas.explainit</string>
+			<string>io.github.mihaicristianfarcas.asides</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>explainit</string>
+				<string>asides</string>
 			</array>
 		</dict>
 	</array>

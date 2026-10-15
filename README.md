@@ -1,11 +1,11 @@
-# explainit
+# asides
 
 **Talk through bugs while you test. Get them appended, transcribed on your Mac, to a Markdown note
 in the repo you're working on**, with screenshots inline, ready to hand to a colleague or a coding agent.
 
 ```
-$ cd ~/code/shop && explainit
-ExplainIt ready in ~/code/shop
+$ cd ~/code/shop && asides
+Asides ready in ~/code/shop
   → appending to "Checkout session" (4 entries)
   ⌃⌥Space record · ⌃⌥N record into a new note · ⌃⌥V attach clipboard image · Esc cancel
 ```
@@ -41,49 +41,49 @@ Releases are signed and notarized by Apple, and run on Apple silicon Macs.
 This repository is also a Homebrew tap:
 
 ```bash
-brew tap mihaicristianfarcas/explainit https://github.com/mihaicristianfarcas/explainit
-brew install --cask mihaicristianfarcas/explainit/explainit
+brew tap mihaicristianfarcas/asides https://github.com/mihaicristianfarcas/asides
+brew install --cask mihaicristianfarcas/asides/asides
 ```
 
 Homebrew 7 and later only load casks from other taps once you trust them, and installing by the
-full name does that. After that, the short name `explainit` works.
+full name does that. After that, the short name `asides` works.
 
-It installs `ExplainIt.app` in `/Applications` and links the `explainit` command into Homebrew's
-`bin`. `brew upgrade --cask explainit` updates it; the upgrade quits the app, so run `explainit`
-again afterwards. `brew uninstall --cask explainit` removes it, and adding `--zap` also deletes
+It installs `Asides.app` in `/Applications` and links the `asides` command into Homebrew's
+`bin`. `brew upgrade --cask asides` updates it; the upgrade quits the app, so run `asides`
+again afterwards. `brew uninstall --cask asides` removes it, and adding `--zap` also deletes
 your settings and the speech model.
 
 ### Download
 
-Download `ExplainIt-<version>.zip` from the
-[Releases page](https://github.com/mihaicristianfarcas/explainit/releases). Unzip it, move
-`ExplainIt.app` to `/Applications`, and link the command that ships inside it:
+Download `Asides-<version>.zip` from the
+[Releases page](https://github.com/mihaicristianfarcas/asides/releases). Unzip it, move
+`Asides.app` to `/Applications`, and link the command that ships inside it:
 
 ```bash
 mkdir -p ~/.local/bin
-ln -s /Applications/ExplainIt.app/Contents/Helpers/explainit ~/.local/bin/explainit
+ln -s /Applications/Asides.app/Contents/Helpers/asides ~/.local/bin/asides
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/mihaicristianfarcas/explainit && cd explainit
-make install   # ExplainIt.app → ~/Applications, plus a link to its CLI in ~/.local/bin
+git clone https://github.com/mihaicristianfarcas/asides && cd asides
+make install   # Asides.app → ~/Applications, plus a link to its CLI in ~/.local/bin
 ```
 
 With the download or a source build, make sure `~/.local/bin` is on your `PATH`. On first
-launch, ExplainIt asks for microphone access and downloads the speech model (574 MB,
-checksum-verified) to `~/Library/Application Support/ExplainIt/models/`.
+launch, Asides asks for microphone access and downloads the speech model (574 MB,
+checksum-verified) to `~/Library/Application Support/Asides/models/`.
 
 `make install` signs both binaries with the hardened runtime, using the best identity in your
 keychain: a Developer ID Application certificate, then an Apple Development one, then a
-self-signed "ExplainIt Dev" one. Any of these keeps the microphone permission across updates.
+self-signed "Asides Dev" one. Any of these keeps the microphone permission across updates.
 Without one, the app is signed ad hoc: macOS treats every rebuild as a new app and asks for the
 microphone again. If you don't have an Apple certificate, run `make cert` once. It creates the
 self-signed identity in your login keychain and asks for your password.
 
 `make uninstall` removes the app and the command. Settings and models stay in
-`~/Library/Application Support/ExplainIt`.
+`~/Library/Application Support/Asides`.
 
 ## Use
 
@@ -91,13 +91,13 @@ self-signed identity in your login keychain and asks for your password.
 
 | Command | |
 |---|---|
-| `explainit` | Bind the repo you're in (its git root, or the current directory if it isn't a repo) and start the menu-bar app. Recordings append to the latest note there. |
-| `explainit new [TITLE]` | The next recording starts a new note, titled TITLE or after your first sentence. |
-| `explainit path` | Print the latest note's path, e.g. `claude "fix the bugs in $(explainit path)"`. |
-| `explainit open` | Open the latest note in your Markdown editor. |
-| `explainit status` | Show what the app is doing and where it's bound. |
-| `explainit export [--out FILE]` | Zip the latest note (text, screenshots, audio) to share it. |
-| `explainit quit` | Quit the app, after it finishes any queued transcriptions. |
+| `asides` | Bind the repo you're in (its git root, or the current directory if it isn't a repo) and start the menu-bar app. Recordings append to the latest note there. |
+| `asides new [TITLE]` | The next recording starts a new note, titled TITLE or after your first sentence. |
+| `asides path` | Print the latest note's path, e.g. `claude "fix the bugs in $(asides path)"`. |
+| `asides open` | Open the latest note in your Markdown editor. |
+| `asides status` | Show what the app is doing and where it's bound. |
+| `asides export [--out FILE]` | Zip the latest note (text, screenshots, audio) to share it. |
+| `asides quit` | Quit the app, after it finishes any queued transcriptions. |
 
 `-C <dir>` runs any command as if it were started in `<dir>`.
 
@@ -126,7 +126,7 @@ The icon shows what's happening: idle, recording (red, with a timer), transcribi
 ## Notes
 
 ```
-<repo>/.explainit/                      ← added to .git/info/exclude (local only)
+<repo>/.asides/                      ← added to .git/info/exclude (local only)
   2026-10-15-1432 Checkout session/
     notes.md
     images/02-143851.png
@@ -148,7 +148,7 @@ environment:
   macos: 26.5.2
   browser: Firefox 143.0
   display: 3024x1964 @2x
-transcription: explainit 0.1.0 · whisper large-v3-turbo (local)
+transcription: asides 0.1.0 · whisper large-v3-turbo (local)
 ---
 
 ## 1 · 14:32
@@ -164,11 +164,11 @@ And on mobile the button text wraps.
 - **Entries** are numbered, so people can refer to "#3".
 - **Writes** only ever append, so an editor or agent that has the note open simply reloads it.
 - **Sharing:** pass the note's path to an agent working in the repo, or give colleagues the zip
-  from `explainit export`.
+  from `asides export`.
 
 ## Settings
 
-`~/Library/Application Support/ExplainIt/config.toml` (Preferences → Edit Shortcuts & Settings…).
+`~/Library/Application Support/Asides/config.toml` (Preferences → Edit Shortcuts & Settings…).
 Changes apply as soon as you save.
 
 ```toml
@@ -197,7 +197,7 @@ more reliable; a single entry skips detection altogether.
 - **The network** is used for one thing only: downloading the model from Hugging Face the first
   time (or when you switch models).
 - **Microphone** access is required.
-- **Clipboard:** macOS may ask once whether ExplainIt may paste from other apps, when it reads a
+- **Clipboard:** macOS may ask once whether Asides may paste from other apps, when it reads a
   screenshot from the clipboard. Choose Allow.
 - **No other permissions:** Accessibility, Input Monitoring and Screen Recording are not needed.
   The shortcuts use the system hot-key API.
@@ -216,11 +216,11 @@ more reliable; a single entry skips detection altogether.
 
 ## How it works
 
-- **Two parts.** A menu-bar app, `ExplainIt.app`, does the recording and transcription. The
-  `explainit` command tells it which repo to use, through `explainit://` links opened with
+- **Two parts.** A menu-bar app, `Asides.app`, does the recording and transcription. The
+  `asides` command tells it which repo to use, through `asides://` links opened with
   `open -g`, and reads the state the app publishes in `state.json`. The app is never started as a
   child of your terminal: it keeps running when the terminal closes, and macOS asks for the
-  microphone on behalf of ExplainIt rather than your terminal.
+  microphone on behalf of Asides rather than your terminal.
 - **Recording.** Audio is captured with CoreAudio (cpal), resampled to 16 kHz, and transcribed in
   one pass after you stop. With large-v3-turbo on an M4 Pro, 18 s of speech takes about 1 s and
   95 s about 4 s, in the background while you keep testing.

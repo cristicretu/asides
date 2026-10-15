@@ -1,11 +1,11 @@
 #!/bin/bash
-# End-to-end test: the installed ExplainIt.app (built with dev hooks) driven through the `explainit`
-# CLI in a throwaway git repo. WAV fixtures stand in for the microphone (`explainit simulate`).
+# End-to-end test: the installed Asides.app (built with dev hooks) driven through the `asides`
+# CLI in a throwaway git repo. WAV fixtures stand in for the microphone (`asides simulate`).
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FIX="$ROOT/tests/fixtures"
-CLI="${EXPLAINIT_CLI:-$HOME/.local/bin/explainit}"
+CLI="${ASIDES_CLI:-$HOME/.local/bin/asides}"
 WORK=$(mktemp -d)
 trap '"$CLI" quit >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
@@ -39,16 +39,16 @@ cd "$REPO/src" # binding from a subdirectory must bind the repo root
 echo "Bind"
 out=$("$CLI")
 echo "$out" | sed 's/^/    /'
-check "app started and bound to the repo root" grep -q "ExplainIt ready in .*/shop$" <<<"$out"
+check "app started and bound to the repo root" grep -q "Asides ready in .*/shop$" <<<"$out"
 check "no notes yet" grep -q "first recording creates a note" <<<"$out"
-check ".explainit/ excluded locally" grep -qx ".explainit/" "$REPO/.git/info/exclude"
+check ".asides/ excluded locally" grep -qx ".asides/" "$REPO/.git/info/exclude"
 
 echo "New titled note: English recording + screenshot"
-check "explainit new acknowledges the title" grep -q 'new note "Checkout session"' <<<"$("$CLI" new "Checkout session")"
+check "asides new acknowledges the title" grep -q 'new note "Checkout session"' <<<"$("$CLI" new "Checkout session")"
 "$CLI" simulate "$FIX/en_bug.wav" --image "$FIX/screenshot.png" --at 6.5 >/dev/null
 for _ in $(seq 1 120); do NOTE=$("$CLI" path 2>/dev/null) && break; sleep 0.5; done
 wait_for "$NOTE" "## 1 ·"
-check "note folder named after the title" grep -q "/.explainit/[0-9-]* Checkout session/notes.md$" <<<"$NOTE"
+check "note folder named after the title" grep -q "/.asides/[0-9-]* Checkout session/notes.md$" <<<"$NOTE"
 check "front matter: title" contains "$NOTE" "title: Checkout session"
 check "front matter: git branch" contains "$NOTE" "branch: feat/checkout"
 check "front matter: git remote" contains "$NOTE" 'remote: "git@github.com:acme/shop.git"'
@@ -89,7 +89,7 @@ echo "Switch between repos (the menu's Directory list)"
 OTHER="$WORK/admin"
 mkdir -p "$OTHER"
 git -C "$OTHER" init -q -b main
-recent() { /usr/bin/python3 -I -c 'import json, os, sys; print("\n".join(os.path.basename(d) for d in json.load(open(sys.argv[1]))["recent_dirs"][:2]))' "$HOME/Library/Application Support/ExplainIt/state.json"; }
+recent() { /usr/bin/python3 -I -c 'import json, os, sys; print("\n".join(os.path.basename(d) for d in json.load(open(sys.argv[1]))["recent_dirs"][:2]))' "$HOME/Library/Application Support/Asides/state.json"; }
 "$CLI" -C "$OTHER" >/dev/null
 check "binding another repo puts it first" test "$(recent | tr '\n' ' ')" = "admin shop "
 check "the new repo has no notes yet" grep -q "No notes in" <<<"$("$CLI" -C "$OTHER" status)"

@@ -1,4 +1,4 @@
-//! Platform-independent logic shared by the `explainit` CLI and the ExplainIt menu-bar app.
+//! Platform-independent logic shared by the `asides` CLI and the Asides menu-bar app.
 
 pub mod config;
 pub mod frontmatter;

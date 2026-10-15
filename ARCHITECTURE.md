@@ -1,22 +1,22 @@
 # Architecture
 
-How explainit fits together, for anyone about to change it. User-facing behavior is in the
+How asides fits together, for anyone about to change it. User-facing behavior is in the
 [README](README.md); how to set up, test and submit changes is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Bird's-eye view
 
 ```
- terminal                        ExplainIt.app (menu bar, one process)
+ terminal                        Asides.app (menu bar, one process)
 ┌───────────┐  open -g -b …   ┌─────────────────────────────────────────────────────────────┐
-│ explainit │ ──────────────▶ │ main thread: tao event loop                                 │
-│   (CLI)   │ explainit://…   │   App: bindings, recording, status icon and menu, shortcuts │
+│ asides │ ──────────────▶ │ main thread: tao event loop                                 │
+│   (CLI)   │ asides://…   │   App: bindings, recording, status icon and menu, shortcuts │
 │           │                 │        │ Job                          ▲ Outcome            │
 │           │ ◀────────────── │        ▼                              │                    │
 └───────────┘   state.json    │ worker thread: resample → Whisper → write note files        │
       │                       └─────────────────────────────────────────────────────────────┘
       │ path / open / export                │ appends
       ▼                                      ▼
-            <repo>/.explainit/<YYYY-MM-DD-HHMM Title>/notes.md, images/, audio/
+            <repo>/.asides/<YYYY-MM-DD-HHMM Title>/notes.md, images/, audio/
 ```
 
 - **The CLI is a remote control.** It works out which directory to bind, then hands the app a link
@@ -31,20 +31,20 @@ How explainit fits together, for anyone about to change it. User-facing behavior
 
 ```
 crates/
-  explainit-core/     platform-independent, no macOS or UI dependencies, unit-tested
+  asides-core/     platform-independent, no macOS or UI dependencies, unit-tested
     notes.rs          note folders, latest-note discovery, titles, append, entry numbering, zip export
     frontmatter.rs    YAML metadata (written once per note)
     markdown.rs       entry composition: segments → paragraphs, image placement by timestamp
     project.rs        bind rules (git root or the current directory), git facts, .git/info/exclude
-    link.rs           explainit:// link format (the CLI → app protocol)
+    link.rs           asides:// link format (the CLI → app protocol)
     state.rs          state.json (the app → CLI protocol), recent directories
     config.rs         config.toml schema and defaults, shortcut pretty-printing
     models.rs         Whisper model catalog (file names, sizes, SHA-256)
     resample.rs       windowed-sinc resampler to 16 kHz
     paths.rs          bundle ID, URL scheme, Application Support paths, tilde()
-  explainit-cli/      shipped inside the bundle as ExplainIt.app/Contents/Helpers/explainit
+  asides-cli/      shipped inside the bundle as Asides.app/Contents/Helpers/asides
     main.rs           clap subcommands, `open -g -b <bundle id> <link>`, waits for the app to acknowledge
-  explainit-app/      binary `explainit-app`, renamed ExplainIt inside the bundle
+  asides-app/      binary `asides-app`, renamed Asides inside the bundle
     main.rs           App: event loop, UserEvent dispatch, recording state machine, bind(), refresh(), publish()
     tray.rs           status item and menu (MenuAction, View, Directory submenu)
     icons.rs          SF Symbols rendered to RGBA for tray-icon
@@ -56,10 +56,10 @@ crates/
     environment.rs    macOS version, frontmost or last-active browser, display (note metadata)
     macos.rs          microphone permission, folder picker, sounds, open/reveal
 packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL scheme
-packaging/ExplainIt.entitlements   microphone entitlement (required by the hardened runtime)
+packaging/Asides.entitlements   microphone entitlement (required by the hardened runtime)
 scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh, release.sh
 docs/                 the website (GitHub Pages): index.html, favicon.svg, og.png
-Casks/explainit.rb    the Homebrew cask; the repository doubles as a tap
+Casks/asides.rb       the Homebrew cask; the repository doubles as a tap
 ```
 
 ## Threads and how they talk
@@ -78,11 +78,11 @@ Background threads never touch AppKit objects. They send `UserEvent`s through th
 
 ## Lifecycles
 
-### Binding (`explainit` in a repo)
+### Binding (`asides` in a repo)
 
 1. The CLI calls `project::resolve_bind_dir` (git root, otherwise the current directory) and
    `ensure_git_exclude`.
-2. It sends `explainit://bind?dir=…&new=1&title=…&req=<id>` with `open -g -b <bundle id>`.
+2. It sends `asides://bind?dir=…&new=1&title=…&req=<id>` with `open -g -b <bundle id>`.
 3. The app gets `Event::Opened`, then `handle_link`, then `App::bind`. That sets the bound
    directory and the pending "new note" request, moves the directory to the front of the recent
    list, and publishes `state.json` with `last_request = <id>`.
@@ -115,7 +115,7 @@ Choosing a directory from the menu goes through `bind_from_menu`, which applies 
 
 Break these only on purpose, and update this document when you do.
 
-1. **`explainit-core` stays platform-independent.** No AppKit, objc2 or audio crates. Logic that
+1. **`asides-core` stays platform-independent.** No AppKit, objc2 or audio crates. Logic that
    can live there should, because that's where it can be unit-tested.
 2. **AppKit, tray and menu objects are only touched on the main thread.** Background work reports
    back through `UserEvent`.
@@ -132,11 +132,11 @@ Break these only on purpose, and update this document when you do.
 8. **The app is launched by Launch Services, never as a child of a terminal.** Otherwise macOS
    attributes the microphone permission to the terminal, and the app dies with the terminal.
 9. **Binary names must differ by more than letter case.** On case-insensitive APFS,
-   `explainit` and `ExplainIt` in `target/release/` are the same file.
+   `asides` and `Asides` in `target/release/` are the same file.
 10. **Signed with a stable identity and the hardened runtime.** macOS ties the microphone
     permission to the signing identity, so ad hoc signatures re-prompt after every build. Under the
-    hardened runtime every capability needs an entitlement (`packaging/ExplainIt.entitlements`).
-11. **No new permissions without discussion.** Today ExplainIt needs only the microphone (plus the
+    hardened runtime every capability needs an entitlement (`packaging/Asides.entitlements`).
+11. **No new permissions without discussion.** Today Asides needs only the microphone (plus the
     optional clipboard prompt). Features that would require Accessibility, Input Monitoring or
     Screen Recording change what users must trust.
 
@@ -144,10 +144,10 @@ Break these only on purpose, and update this document when you do.
 
 | Path | Written by | Notes |
 |---|---|---|
-| `<dir>/.explainit/…` | worker | the user's notes; excluded from git locally |
-| `~/Library/Application Support/ExplainIt/config.toml` | app (menu), user | reloaded on change; unknown fields ignored, missing ones defaulted |
-| `~/Library/Application Support/ExplainIt/state.json` | app | binding, pending new note, status, recent directories, last acknowledged request |
-| `~/Library/Application Support/ExplainIt/models/` | download thread | `.part` while downloading, renamed after the SHA-256 check |
+| `<dir>/.asides/…` | worker | the user's notes; excluded from git locally |
+| `~/Library/Application Support/Asides/config.toml` | app (menu), user | reloaded on change; unknown fields ignored, missing ones defaulted |
+| `~/Library/Application Support/Asides/state.json` | app | binding, pending new note, status, recent directories, last acknowledged request |
+| `~/Library/Application Support/Asides/models/` | download thread | `.part` while downloading, renamed after the SHA-256 check |
 
 ## Design decisions
 

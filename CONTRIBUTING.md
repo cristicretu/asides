@@ -1,4 +1,4 @@
-# Contributing to explainit
+# Contributing to asides
 
 Thanks for helping! Bug reports, fixes, docs and features are all welcome. For anything bigger
 than a fix, please open an issue first, so we can agree on the approach before you spend time on
@@ -11,43 +11,43 @@ You need macOS 14 or later (Apple silicon recommended), recent stable Rust, the 
 Line Tools and CMake (`brew install cmake`). Full Xcode isn't required.
 
 ```bash
-git clone https://github.com/mihaicristianfarcas/explainit && cd explainit
+git clone https://github.com/mihaicristianfarcas/asides && cd asides
 make cert        # once, only if you have no Apple Development or Developer ID certificate
-make install     # builds, signs and installs ExplainIt.app and the explainit command
+make install     # builds, signs and installs Asides.app and the asides command
 make fixtures    # once: test audio generated with the macOS voices
 ```
 
 - `make install` signs with the best identity it finds (`scripts/signing-identity.sh`): Developer
-  ID Application, then Apple Development, then "ExplainIt Dev". A stable identity is what lets
+  ID Application, then Apple Development, then "Asides Dev". A stable identity is what lets
   macOS keep the microphone permission across rebuilds; with an ad hoc signature it asks after
-  every `make install`. `make cert` creates the self-signed "ExplainIt Dev" identity and asks for
+  every `make install`. `make cert` creates the self-signed "Asides Dev" identity and asks for
   your password.
 - `make fixtures` needs the Romanian voice "Ioana": System Settings → Accessibility → Spoken
   Content → System Voice → Manage Voices… The generated files are gitignored, because the macOS
   license doesn't allow redistributing system-voice audio.
 - The first launch downloads the speech model (574 MB) to
-  `~/Library/Application Support/ExplainIt/models/`.
+  `~/Library/Application Support/Asides/models/`.
 
 ## Development loop
 
 | You changed | Check it with |
 |---|---|
-| `explainit-core` | `cargo test -p explainit-core` |
-| the CLI | `cargo run -p explainit-cli -- status` (and the other subcommands) |
-| the app | `make install`, then `explainit` in a scratch repo and try it for real |
+| `asides-core` | `cargo test -p asides-core` |
+| the CLI | `cargo run -p asides-cli -- status` (and the other subcommands) |
+| the app | `make install`, then `asides` in a scratch repo and try it for real |
 
-`make install` quits the running ExplainIt and replaces it.
+`make install` quits the running Asides and replaces it.
 
 The app's output (`eprintln!`) is discarded when it's launched normally. To see it, quit the app
-(`explainit quit`) and run the binary from a terminal:
-`~/Applications/ExplainIt.app/Contents/MacOS/ExplainIt`. In that mode macOS attributes the
+(`asides quit`) and run the binary from a terminal:
+`~/Applications/Asides.app/Contents/MacOS/Asides`. In that mode macOS attributes the
 microphone permission to your terminal app, so it may ask again.
 
 Before you open a pull request:
 
 ```bash
 cargo fmt --all
-cargo clippy --workspace --all-targets --features explainit-app/dev-hooks -- -D warnings
+cargo clippy --workspace --all-targets --features asides-app/dev-hooks -- -D warnings
 make test
 make e2e          # if you changed behavior of the CLI or the app
 ```
@@ -62,13 +62,13 @@ deleted.
 |---|---|---|
 | Unit | `make test` | notes, metadata, Markdown, git info, links, state, config, resampling, language choice, icon rendering |
 | Speech | `make test-speech` | transcription of the fixtures (needs the model) and a real model download with checksum check (190 MB) |
-| End-to-end | `make e2e` | installs a build with the `dev-hooks` feature, then drives it through the `explainit` command in a throwaway git repo, feeding WAV files instead of the microphone (`explainit simulate`) |
+| End-to-end | `make e2e` | installs a build with the `dev-hooks` feature, then drives it through the `asides` command in a throwaway git repo, feeding WAV files instead of the microphone (`asides simulate`) |
 | Manual | checklist below | everything a script can't do: the microphone, shortcuts, menus and permissions |
 
 To look at the menu-bar icons without installing, render them to files:
 
 ```bash
-EXPLAINIT_ICON_DUMP=/tmp/icons cargo test -p explainit-app icons
+ASIDES_ICON_DUMP=/tmp/icons cargo test -p asides-app icons
 ```
 
 This writes raw RGBA data (`<symbol>-<width>x<height>.rgba`) for each icon.
@@ -78,8 +78,8 @@ This writes raw RGBA data (`<symbol>-<width>x<height>.rgba`) for each icon.
 Run the relevant parts when you change the app's UI, recording, shortcuts or permissions, and say
 in your pull request what you tried.
 
-- [ ] **First launch after `tccutil reset Microphone io.github.mihaicristianfarcas.explainit`:**
-  the microphone prompt names ExplainIt, not your terminal.
+- [ ] **First launch after `tccutil reset Microphone io.github.mihaicristianfarcas.asides`:**
+  the microphone prompt names Asides, not your terminal.
 - [ ] **Shortcuts with a browser in front, including full screen:**
   - `⌃⌥Space` tap starts, a second tap stops
   - holding `⌃⌥Space` records until release
@@ -97,7 +97,7 @@ in your pull request what you tried.
   - AirPods as the microphone
   - sleep while recording
   - the bound directory deleted while the app runs
-- [ ] **CLI:** closing the terminal after `explainit` leaves the app running; `explainit quit`
+- [ ] **CLI:** closing the terminal after `asides` leaves the app running; `asides quit`
   finishes queued transcriptions first.
 
 ## Common changes
@@ -114,7 +114,7 @@ in your pull request what you tried.
   2. Handle the action in `App::on_menu`.
   3. Escape `&` in dynamic text with `menu_text`.
 - **A CLI command:**
-  - Add a `Command` variant in `explainit-cli/src/main.rs`.
+  - Add a `Command` variant in `asides-cli/src/main.rs`.
   - If it needs the app, add a `Link` variant in `link.rs` (with a round-trip test) and handle it
     in `App::handle_link`.
   - Replies go through `state.json`: add a field to `AppState` with a serde default.
@@ -127,7 +127,7 @@ in your pull request what you tried.
 ## Style
 
 - `rustfmt` (120 columns, see `rustfmt.toml`) and clippy with warnings treated as errors.
-- Put logic in `explainit-core` when it doesn't need macOS. That's where it can be unit-tested.
+- Put logic in `asides-core` when it doesn't need macOS. That's where it can be unit-tested.
 - Comments explain why, not what. Match the surrounding code's naming and comment density.
 - Error messages are shown to users in the menu and the CLI, so make them actionable: say what
   happened and what to do. Avoid `unwrap()` on anything that depends on user data, files or the
@@ -148,20 +148,20 @@ certificate in your keychain.
 
 1. **Store notary credentials once.** Create an app-specific password at
    [account.apple.com](https://account.apple.com) (Sign-In and Security → App-Specific
-   Passwords), then run `xcrun notarytool store-credentials explainit-notary --apple-id <Apple ID>
+   Passwords), then run `xcrun notarytool store-credentials asides-notary --apple-id <Apple ID>
    --team-id <Team ID>`. To use another profile name, set `NOTARY_PROFILE`.
 2. **Set the version** in `Cargo.toml` (`[workspace.package] version`). The app's `Info.plist` picks
    it up.
 3. **Run `make release`.** It:
-   - builds the app with the CLI inside (`Contents/Helpers/explainit`)
+   - builds the app with the CLI inside (`Contents/Helpers/asides`)
    - signs both with the hardened runtime and a secure timestamp
    - submits the build to Apple and waits; if Apple rejects it, the script prints the notary log
    - staples the ticket and checks the result with Gatekeeper
-   - writes `dist/ExplainIt-<version>.zip` and prints its SHA-256
-   - writes the version and checksum into the Homebrew cask, `Casks/explainit.rb`
+   - writes `dist/Asides-<version>.zip` and prints its SHA-256
+   - writes the version and checksum into the Homebrew cask, `Casks/asides.rb`
 4. **Tag and publish:** `git tag v<version> && git push --tags`, then
-   `gh release create v<version> dist/ExplainIt-<version>.zip`.
-5. **Update Homebrew:** commit `Casks/explainit.rb` and push it to `main`. The repository doubles
+   `gh release create v<version> dist/Asides-<version>.zip`.
+5. **Update Homebrew:** commit `Casks/asides.rb` and push it to `main`. The repository doubles
    as a Homebrew tap, so `brew upgrade` sees the release from then on. Push it only after the
    release is published: the cask downloads the zip from it.
 
@@ -179,8 +179,8 @@ together.
 
 Use the bug report template. Include:
 - your macOS version
-- `explainit --version`
-- the output of `explainit status`
+- `asides --version`
+- the output of `asides status`
 - the steps to reproduce
 
 Notes and audio clips can contain private information, so share only the relevant excerpt.

@@ -1,4 +1,4 @@
-//! `state.json`: what the running app publishes for the CLI (`explainit status`, bind confirmation).
+//! `state.json`: what the running app publishes for the CLI (`asides status`, bind confirmation).
 
 use std::fs;
 use std::io;
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct AppState {
     pub pid: u32,
     pub bound_dir: Option<PathBuf>,
-    /// Set by `explainit new [TITLE]`: the next recording starts a new note.
+    /// Set by `asides new [TITLE]`: the next recording starts a new note.
     pub pending_new: Option<PendingNew>,
     /// `idle`, `recording`, `transcribing`, `downloading`, `error`.
     pub status: String,

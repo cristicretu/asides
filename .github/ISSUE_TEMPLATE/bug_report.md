@@ -16,8 +16,8 @@ labels: bug
 
 - macOS version:
 - Mac (chip):
-- `explainit --version`:
-- Output of `explainit status`:
+- `asides --version`:
+- Output of `asides status`:
 - Speech model (Preferences → Speech Model):
 
 <!-- Notes and audio clips can contain private information: share only the relevant excerpt. -->

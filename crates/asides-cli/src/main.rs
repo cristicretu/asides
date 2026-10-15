@@ -3,22 +3,22 @@ use std::process::Command as Process;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use asides_core::config::{Config, pretty_shortcut};
+use asides_core::link::Link;
+use asides_core::notes::{self, Note};
+use asides_core::paths::{self, BUNDLE_ID, tilde};
+use asides_core::project;
+use asides_core::state::AppState;
 use clap::{Parser, Subcommand};
-use explainit_core::config::{Config, pretty_shortcut};
-use explainit_core::link::Link;
-use explainit_core::notes::{self, Note};
-use explainit_core::paths::{self, BUNDLE_ID, tilde};
-use explainit_core::project;
-use explainit_core::state::AppState;
 
-/// Talk through bugs while you test; ExplainIt appends what you said to a Markdown note in this repo.
+/// Talk through bugs while you test; Asides appends what you said to a Markdown note in this repo.
 ///
-/// Run `explainit` in a repo (or any directory) to bind the menu-bar app to it, then use the
-/// global shortcuts while testing. Notes live in `<repo>/.explainit/`.
+/// Run `asides` in a repo (or any directory) to bind the menu-bar app to it, then use the
+/// global shortcuts while testing. Notes live in `<repo>/.asides/`.
 #[derive(Parser)]
-#[command(name = "explainit", version)]
+#[command(name = "asides", version)]
 struct Cli {
-    /// Run as if explainit was started in DIR (like `git -C`).
+    /// Run as if asides was started in DIR (like `git -C`).
     #[arg(short = 'C', global = true, value_name = "DIR")]
     dir: Option<PathBuf>,
     #[command(subcommand)]
@@ -57,11 +57,11 @@ enum Command {
 }
 
 fn main() {
-    // Rust ignores SIGPIPE, which turns `explainit status | head -1` into a panic. Behave like other
+    // Rust ignores SIGPIPE, which turns `asides status | head -1` into a panic. Behave like other
     // command-line tools instead: exit quietly when the reader goes away.
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     if let Err(err) = run(Cli::parse()) {
-        eprintln!("explainit: {err:#}");
+        eprintln!("asides: {err:#}");
         std::process::exit(1);
     }
 }
@@ -90,7 +90,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(Command::Export { out }) => export(&dir()?, out),
         Some(Command::Quit) => {
             if running_state().is_none() {
-                println!("ExplainIt is not running.");
+                println!("Asides is not running.");
                 return Ok(());
             }
             send(&Link::Quit)
@@ -109,7 +109,7 @@ fn run(cli: Cli) -> Result<()> {
 
 fn bind(dir: &Path, new_note: bool, title: Option<String>) -> Result<()> {
     if project::ensure_git_exclude(dir)? {
-        println!("Added .explainit/ to .git/info/exclude (local only; .gitignore untouched).");
+        println!("Added .asides/ to .git/info/exclude (local only; .gitignore untouched).");
     }
     let request = request_id();
     send(&Link::Bind { dir: dir.to_path_buf(), new_note, title: title.clone(), request: Some(request.clone()) })?;
@@ -127,7 +127,7 @@ fn bind(dir: &Path, new_note: bool, title: Option<String>) -> Result<()> {
             None => "first recording creates a note".into(),
         }
     };
-    println!("ExplainIt ready in {}", tilde(dir));
+    println!("Asides ready in {}", tilde(dir));
     println!("  → {target}");
     println!(
         "  {} record · {} record into a new note · {} attach clipboard image · {} cancel",
@@ -137,7 +137,7 @@ fn bind(dir: &Path, new_note: bool, title: Option<String>) -> Result<()> {
         pretty_shortcut(&config.shortcuts.cancel),
     );
     if state.microphone == "denied" {
-        println!("  ! Microphone access is denied: System Settings → Privacy & Security → Microphone → ExplainIt.");
+        println!("  ! Microphone access is denied: System Settings → Privacy & Security → Microphone → Asides.");
     }
     if (state.status == "downloading" || state.status == "error")
         && let Some(detail) = state.detail
@@ -149,9 +149,9 @@ fn bind(dir: &Path, new_note: bool, title: Option<String>) -> Result<()> {
 
 fn status(dir: &Path) -> Result<()> {
     match running_state() {
-        None => println!("ExplainIt is not running. Run `explainit` in a repo to start it."),
+        None => println!("Asides is not running. Run `asides` in a repo to start it."),
         Some(state) => {
-            println!("ExplainIt is running (pid {}) · {}", state.pid, state.status);
+            println!("Asides is running (pid {}) · {}", state.pid, state.status);
             if let Some(detail) = &state.detail {
                 println!("  {detail}");
             }
@@ -196,7 +196,7 @@ fn send(link: &Link) -> Result<()> {
     let out = Process::new("open").args(["-g", "-b", BUNDLE_ID]).arg(link.to_url()).output()?;
     if !out.status.success() {
         bail!(
-            "could not reach ExplainIt.app ({}). Is it installed? Run `make install` in the explainit repo.",
+            "could not reach Asides.app ({}). Is it installed? Run `make install` in the asides repo.",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
@@ -213,7 +213,7 @@ fn wait_for_ack(request: &str) -> Result<AppState> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    bail!("ExplainIt did not respond within 15 s")
+    bail!("Asides did not respond within 15 s")
 }
 
 /// The published state, if the app that wrote it is still alive.

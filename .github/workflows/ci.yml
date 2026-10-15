@@ -24,7 +24,7 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --features explainit-app/dev-hooks -- -D warnings
+        run: cargo clippy --workspace --all-targets --features asides-app/dev-hooks -- -D warnings
       - name: Test
         run: cargo test --workspace
       - name: Bundle

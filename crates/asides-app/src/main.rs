@@ -1,5 +1,5 @@
-//! ExplainIt: menu-bar app that records spoken bug reports and appends them, transcribed locally,
-//! to the latest note in the directory bound with the `explainit` CLI.
+//! Asides: menu-bar app that records spoken bug reports and appends them, transcribed locally,
+//! to the latest note in the directory bound with the `asides` CLI.
 
 mod audio;
 mod clipboard;
@@ -17,14 +17,14 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use asides_core::config::Config;
+use asides_core::link::Link;
+use asides_core::models::ModelSpec;
+use asides_core::notes;
+use asides_core::paths::{self, tilde};
+use asides_core::project;
+use asides_core::state::{self as app_state, AppState, PendingNew};
 use chrono::{DateTime, Local};
-use explainit_core::config::Config;
-use explainit_core::link::Link;
-use explainit_core::models::ModelSpec;
-use explainit_core::notes;
-use explainit_core::paths::{self, tilde};
-use explainit_core::project;
-use explainit_core::state::{self as app_state, AppState, PendingNew};
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use objc2::MainThreadMarker;
 use tao::event::{Event, StartCause};
@@ -258,7 +258,7 @@ impl App {
                 #[cfg(not(feature = "dev-hooks"))]
                 {
                     let _ = (wav, new_note, image, image_at);
-                    self.fail("This build does not support `explainit simulate`.".into());
+                    self.fail("This build does not support `asides simulate`.".into());
                 }
                 self.publish();
             }
@@ -399,10 +399,10 @@ impl App {
 
     fn start_recording(&mut self, force_new: bool, pressed: Option<(Action, Instant)>) {
         let Some(dir) = self.bound.clone() else {
-            return self.fail("Not bound to a directory. Run `explainit` in a repo first.".into());
+            return self.fail("Not bound to a directory. Run `asides` in a repo first.".into());
         };
         if !dir.is_dir() {
-            return self.fail(format!("{} no longer exists. Run `explainit` again.", dir.display()));
+            return self.fail(format!("{} no longer exists. Run `asides` again.", dir.display()));
         }
         match macos::mic_status() {
             Mic::Granted => self.mic = Mic::Granted,
@@ -505,7 +505,7 @@ impl App {
             return;
         }
         let Some(dir) = self.bound.clone() else {
-            return self.fail("Not bound to a directory. Run `explainit` in a repo first.".into());
+            return self.fail("Not bound to a directory. Run `asides` in a repo first.".into());
         };
         let new_note = self.pending_new.take().map(|p| p.title);
         self.submit(Job::Image(Box::new(ImageJob {
@@ -521,7 +521,7 @@ impl App {
         self.in_flight += 1;
         if self.jobs.send(job).is_err() {
             self.in_flight -= 1;
-            self.fail("The transcription worker stopped. Please restart ExplainIt.".into());
+            self.fail("The transcription worker stopped. Please restart Asides.".into());
         }
         self.refresh();
         self.publish();
@@ -606,7 +606,7 @@ impl App {
             };
             ("idle", &icons.idle, None, status)
         } else {
-            ("unbound", &icons.unbound, None, "Not bound · run `explainit` in a repo".into())
+            ("unbound", &icons.unbound, None, "Not bound · run `asides` in a repo".into())
         };
 
         let note_info = match (&dir_name, &self.pending_new, &self.latest) {
@@ -641,7 +641,7 @@ impl App {
         });
     }
 
-    /// Publishes the app's state for the CLI (`explainit status`, bind confirmation).
+    /// Publishes the app's state for the CLI (`asides status`, bind confirmation).
     fn publish(&self) {
         let status = if self.recording.is_some() {
             "recording"

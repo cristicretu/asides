@@ -1,4 +1,4 @@
-//! `~/Library/Application Support/ExplainIt/config.toml`
+//! `~/Library/Application Support/Asides/config.toml`
 
 use std::fs;
 use std::io;
@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-const HEADER: &str = r#"# ExplainIt settings. Changes are picked up automatically.
+const HEADER: &str = r#"# Asides settings. Changes are picked up automatically.
 # Shortcut syntax: modifiers (ctrl, alt/option, shift, cmd) + a key (Space, Escape, KeyN, Digit1, F5, …),
 # joined with '+'. Avoid option-only combinations: macOS refuses them.
 # languages: Whisper codes to choose between, e.g. ["en", "ro"]; [] detects any language.

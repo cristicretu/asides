@@ -4,7 +4,7 @@
 
 ## How it was tested
 
-- [ ] `cargo fmt --all` and `cargo clippy --workspace --all-targets --features explainit-app/dev-hooks -- -D warnings`
+- [ ] `cargo fmt --all` and `cargo clippy --workspace --all-targets --features asides-app/dev-hooks -- -D warnings`
 - [ ] `make test`
 - [ ] `make e2e` (if CLI or app behavior changed)
 - [ ] Manual QA from CONTRIBUTING.md (if the UI, recording, shortcuts or permissions changed). What I tried:

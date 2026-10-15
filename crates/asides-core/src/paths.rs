@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-pub const APP_NAME: &str = "ExplainIt";
-pub const BUNDLE_ID: &str = "io.github.mihaicristianfarcas.explainit";
-pub const URL_SCHEME: &str = "explainit";
+pub const APP_NAME: &str = "Asides";
+pub const BUNDLE_ID: &str = "io.github.mihaicristianfarcas.asides";
+pub const URL_SCHEME: &str = "asides";
 /// Folder created inside the bound directory that holds one sub-folder per note.
-pub const NOTES_DIR: &str = ".explainit";
+pub const NOTES_DIR: &str = ".asides";
 pub const NOTE_FILE: &str = "notes.md";
 
-/// `~/Library/Application Support/ExplainIt`
+/// `~/Library/Application Support/Asides`
 pub fn support_dir() -> PathBuf {
     std::env::home_dir().expect("HOME is not set").join("Library/Application Support").join(APP_NAME)
 }

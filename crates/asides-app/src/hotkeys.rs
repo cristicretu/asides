@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use explainit_core::config::Shortcuts;
+use asides_core::config::Shortcuts;
 use global_hotkey::GlobalHotKeyManager;
 use global_hotkey::hotkey::HotKey;
 

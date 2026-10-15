@@ -85,7 +85,7 @@ mod tests {
             macos: Some("26.5.2".into()),
             browser: Some("Firefox 143.0".into()),
             display: Some("3024x1964 @2x".into()),
-            transcription: "explainit 0.1.0 · whisper large-v3-turbo (local)".into(),
+            transcription: "asides 0.1.0 · whisper large-v3-turbo (local)".into(),
         };
         let offset = meta.created.format("%:z").to_string();
         assert_eq!(
@@ -95,7 +95,7 @@ mod tests {
                  git:\n  remote: \"git@github.com:acme/shop.git\"\n  branch: feat/checkout\n  commit: \"1234567\"\n  \
                  commit_subject: \"Fix: \\\"rounding\\\"\"\n  uncommitted_files: 3\n\
                  environment:\n  macos: 26.5.2\n  browser: Firefox 143.0\n  display: 3024x1964 @2x\n\
-                 transcription: explainit 0.1.0 · whisper large-v3-turbo (local)\n---\n"
+                 transcription: asides 0.1.0 · whisper large-v3-turbo (local)\n---\n"
             )
         );
     }
