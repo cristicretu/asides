@@ -1,0 +1,47 @@
+use std::path::{Path, PathBuf};
+
+pub const APP_NAME: &str = "ExplainIt";
+pub const BUNDLE_ID: &str = "io.github.mihaicristianfarcas.explainit";
+pub const URL_SCHEME: &str = "explainit";
+/// Folder created inside the bound directory that holds one sub-folder per note.
+pub const NOTES_DIR: &str = ".explainit";
+pub const NOTE_FILE: &str = "notes.md";
+
+/// `~/Library/Application Support/ExplainIt`
+pub fn support_dir() -> PathBuf {
+    std::env::home_dir().expect("HOME is not set").join("Library/Application Support").join(APP_NAME)
+}
+
+pub fn state_path() -> PathBuf {
+    support_dir().join("state.json")
+}
+
+pub fn config_path() -> PathBuf {
+    support_dir().join("config.toml")
+}
+
+pub fn models_dir() -> PathBuf {
+    support_dir().join("models")
+}
+
+/// `/Users/me/code/shop` → `~/code/shop`.
+pub fn tilde(path: &Path) -> String {
+    match std::env::home_dir().and_then(|home| path.strip_prefix(&home).ok().map(Path::to_path_buf)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortens_home_paths() {
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(tilde(&home), "~");
+        assert_eq!(tilde(&home.join("code/shop")), "~/code/shop");
+        assert_eq!(tilde(Path::new("/tmp/x")), "/tmp/x");
+    }
+}

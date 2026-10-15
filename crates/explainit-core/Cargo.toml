@@ -1,0 +1,19 @@
+[package]
+name = "explainit-core"
+description = "Notes, metadata and links shared by the explainit CLI and the ExplainIt menu-bar app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+url.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

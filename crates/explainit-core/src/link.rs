@@ -1,0 +1,135 @@
+//! `explainit://` links: how the CLI talks to the running menu-bar app (via `open`).
+
+use std::path::PathBuf;
+
+use url::Url;
+
+use crate::paths::URL_SCHEME;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Link {
+    /// Bind the app to `dir`. With `new_note`, the next recording starts a new note.
+    Bind {
+        dir: PathBuf,
+        new_note: bool,
+        title: Option<String>,
+        request: Option<String>,
+    },
+    Quit,
+    /// Development hook: process `wav` as if it had just been recorded.
+    Simulate {
+        wav: PathBuf,
+        new_note: bool,
+        image: Option<PathBuf>,
+        image_at: f32,
+        request: Option<String>,
+    },
+}
+
+impl Link {
+    pub fn to_url(&self) -> String {
+        let mut url = Url::parse(&format!("{URL_SCHEME}://{}", self.action())).expect("valid base URL");
+        {
+            let mut q = url.query_pairs_mut();
+            match self {
+                Link::Bind { dir, new_note, title, request } => {
+                    q.append_pair("dir", &dir.to_string_lossy());
+                    if *new_note {
+                        q.append_pair("new", "1");
+                    }
+                    if let Some(title) = title {
+                        q.append_pair("title", title);
+                    }
+                    if let Some(request) = request {
+                        q.append_pair("req", request);
+                    }
+                }
+                Link::Quit => {}
+                Link::Simulate { wav, new_note, image, image_at, request } => {
+                    q.append_pair("wav", &wav.to_string_lossy());
+                    if *new_note {
+                        q.append_pair("new", "1");
+                    }
+                    if let Some(image) = image {
+                        q.append_pair("image", &image.to_string_lossy());
+                        q.append_pair("at", &image_at.to_string());
+                    }
+                    if let Some(request) = request {
+                        q.append_pair("req", request);
+                    }
+                }
+            }
+        }
+        url.to_string().trim_end_matches('?').to_string()
+    }
+
+    pub fn parse(url: &Url) -> Option<Link> {
+        if url.scheme() != URL_SCHEME {
+            return None;
+        }
+        let get = |key: &str| url.query_pairs().find(|(k, _)| k == key).map(|(_, v)| v.into_owned());
+        let flag = |key: &str| get(key).is_some_and(|v| v == "1" || v == "true");
+        match url.host_str()? {
+            "bind" => Some(Link::Bind {
+                dir: get("dir")?.into(),
+                new_note: flag("new"),
+                title: get("title").filter(|t| !t.trim().is_empty()),
+                request: get("req"),
+            }),
+            "quit" => Some(Link::Quit),
+            "simulate" => Some(Link::Simulate {
+                wav: get("wav")?.into(),
+                new_note: flag("new"),
+                image: get("image").map(PathBuf::from),
+                image_at: get("at").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                request: get("req"),
+            }),
+            _ => None,
+        }
+    }
+
+    fn action(&self) -> &'static str {
+        match self {
+            Link::Bind { .. } => "bind",
+            Link::Quit => "quit",
+            Link::Simulate { .. } => "simulate",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip(link: Link) {
+        let url = link.to_url();
+        assert_eq!(Link::parse(&Url::parse(&url).unwrap()), Some(link), "{url}");
+    }
+
+    #[test]
+    fn links_round_trip() {
+        round_trip(Link::Bind {
+            dir: "/Users/me/My Code/shop & co".into(),
+            new_note: true,
+            title: Some("Pagina de setări: bug #3".into()),
+            request: Some("r1".into()),
+        });
+        round_trip(Link::Bind { dir: "/x".into(), new_note: false, title: None, request: None });
+        round_trip(Link::Quit);
+        round_trip(Link::Simulate {
+            wav: "/tmp/a b.wav".into(),
+            new_note: false,
+            image: Some("/tmp/i.png".into()),
+            image_at: 2.5,
+            request: None,
+        });
+        assert_eq!(Link::Quit.to_url(), "explainit://quit");
+    }
+
+    #[test]
+    fn rejects_foreign_links() {
+        assert_eq!(Link::parse(&Url::parse("https://bind?dir=/x").unwrap()), None);
+        assert_eq!(Link::parse(&Url::parse("explainit://nope").unwrap()), None);
+        assert_eq!(Link::parse(&Url::parse("explainit://bind").unwrap()), None);
+    }
+}
