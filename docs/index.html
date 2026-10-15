@@ -31,6 +31,8 @@
   --size: 17px;
   /* The install section's single vertical rhythm. */
   --gap: 24px;
+  /* The space between the headline, the description, the buttons and the demo. */
+  --hero-gap: 64px;
 }
 
 * { box-sizing: border-box; }
@@ -73,10 +75,10 @@ kbd { font-family: var(--sans); }
 .nav { color: var(--muted); text-decoration: none; transition: color 150ms ease; }
 
 /* Hero */
-.hero { padding-top: 80px; }
-h1 { margin-bottom: 24px; font-weight: 600; letter-spacing: -0.01em; }
+.hero { display: flex; flex-direction: column; align-items: flex-start; gap: var(--hero-gap); padding-top: 80px; }
+h1 { font-weight: 600; letter-spacing: -0.01em; }
 .lede { max-width: 36em; color: var(--body); text-wrap: pretty; }
-.cta { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 32px; margin-top: 44px; }
+.cta { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 32px; }
 .button {
   display: inline-flex;
   align-items: center;
@@ -98,7 +100,7 @@ h1 { margin-bottom: 24px; font-weight: 600; letter-spacing: -0.01em; }
    desktop scales with the page. Its text is part of the picture and scales with it. On phones
    the screen shows a square part of the desktop at --zoom, centred on --fx, --fy (set by the demo
    as it goes) and kept within the screen's edges. */
-.demo { padding-top: 80px; }
+.demo { padding-top: var(--hero-gap); }
 .device {
   margin: 0;
   padding: 10px;
@@ -483,11 +485,10 @@ h2 { font-weight: 600; }
 }
 
 @media (max-width: 640px) {
-  :root { --gap: 20px; }
+  :root { --gap: 20px; --hero-gap: 48px; }
   .wrap { padding: 0 20px; }
   .top { height: 60px; }
   .hero { padding-top: 48px; }
-  .demo { padding-top: 56px; }
   .device { padding: 5px; border-radius: 13px; }
   .display { aspect-ratio: 1; border-radius: 8px; }
   .desk, .hud { --zoom: 2; --view-h: 512; }
