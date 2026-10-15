@@ -5,8 +5,8 @@ on:
     branches: [main]
     # The website alone doesn't need the macOS build.
     paths-ignore: ['docs/**']
+  # Every pull request runs it, even docs-only ones: main requires this check to pass.
   pull_request:
-    paths-ignore: ['docs/**']
 
 env:
   CARGO_TERM_COLOR: always

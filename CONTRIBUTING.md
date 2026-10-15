@@ -52,7 +52,9 @@ make test
 make e2e          # if you changed behavior of the CLI or the app
 ```
 
-CI runs formatting, clippy, the unit tests and the app bundle on every pull request.
+CI runs formatting, clippy, the unit tests and the app bundle on every pull request. `main` is
+protected: changes reach it through pull requests that pass CI, and it can't be force-pushed or
+deleted.
 
 ## Tests
 
@@ -163,8 +165,8 @@ certificate in your keychain.
 
 `docs/` is the landing page, served by GitHub Pages from the `docs/` folder on `main`. It's one
 static `index.html` with inline CSS and JavaScript and no build step: open it in a browser to
-preview it. `og.png` is the 1200×630 image shown when the link is shared. Pushes that only change
-`docs/` skip CI.
+preview it. `og.png` is the 1200×630 image shown when the link is shared. Pushes to `main` that
+only change `docs/` skip CI; pull requests always run it.
 
 The page repeats the shortcuts, requirements and install steps from the README, so update both
 together.
