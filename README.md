@@ -42,8 +42,11 @@ This repository is also a Homebrew tap:
 
 ```bash
 brew tap mihaicristianfarcas/explainit https://github.com/mihaicristianfarcas/explainit
-brew install --cask explainit
+brew install --cask mihaicristianfarcas/explainit/explainit
 ```
+
+Homebrew 7 and later only load casks from other taps once you trust them, and installing by the
+full name does that. After that, the short name `explainit` works.
 
 It installs `ExplainIt.app` in `/Applications` and links the `explainit` command into Homebrew's
 `bin`. `brew upgrade --cask explainit` updates it; the upgrade quits the app, so run `explainit`
