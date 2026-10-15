@@ -158,8 +158,12 @@ certificate in your keychain.
    - submits the build to Apple and waits; if Apple rejects it, the script prints the notary log
    - staples the ticket and checks the result with Gatekeeper
    - writes `dist/ExplainIt-<version>.zip` and prints its SHA-256
+   - writes the version and checksum into the Homebrew cask, `Casks/explainit.rb`
 4. **Tag and publish:** `git tag v<version> && git push --tags`, then
    `gh release create v<version> dist/ExplainIt-<version>.zip`.
+5. **Update Homebrew:** commit `Casks/explainit.rb` and push it to `main`. The repository doubles
+   as a Homebrew tap, so `brew upgrade` sees the release from then on. Push it only after the
+   release is published: the cask downloads the zip from it.
 
 ## The website
 

@@ -34,12 +34,27 @@ A few seconds later the transcript is in the note, and the menu-bar icon shows `
 
 ## Install
 
-### Prebuilt
+Releases are signed and notarized by Apple, and run on Apple silicon Macs.
+
+### Homebrew
+
+This repository is also a Homebrew tap:
+
+```bash
+brew tap mihaicristianfarcas/explainit https://github.com/mihaicristianfarcas/explainit
+brew install --cask explainit
+```
+
+It installs `ExplainIt.app` in `/Applications` and links the `explainit` command into Homebrew's
+`bin`. `brew upgrade --cask explainit` updates it; the upgrade quits the app, so run `explainit`
+again afterwards. `brew uninstall --cask explainit` removes it, and adding `--zap` also deletes
+your settings and the speech model.
+
+### Download
 
 Download `ExplainIt-<version>.zip` from the
-[Releases page](https://github.com/mihaicristianfarcas/explainit/releases). Releases are signed and
-notarized by Apple, and run on Apple silicon Macs. Unzip it, move `ExplainIt.app` to `/Applications`, and link the command that
-ships inside it:
+[Releases page](https://github.com/mihaicristianfarcas/explainit/releases). Unzip it, move
+`ExplainIt.app` to `/Applications`, and link the command that ships inside it:
 
 ```bash
 mkdir -p ~/.local/bin
@@ -53,9 +68,9 @@ git clone https://github.com/mihaicristianfarcas/explainit && cd explainit
 make install   # ExplainIt.app → ~/Applications, plus a link to its CLI in ~/.local/bin
 ```
 
-Either way, make sure `~/.local/bin` is on your `PATH`. On first launch, ExplainIt asks for microphone access
-and downloads the speech model (574 MB, checksum-verified) to
-`~/Library/Application Support/ExplainIt/models/`.
+With the download or a source build, make sure `~/.local/bin` is on your `PATH`. On first
+launch, ExplainIt asks for microphone access and downloads the speech model (574 MB,
+checksum-verified) to `~/Library/Application Support/ExplainIt/models/`.
 
 `make install` signs both binaries with the hardened runtime, using the best identity in your
 keychain: a Developer ID Application certificate, then an Apple Development one, then a

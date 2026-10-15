@@ -206,6 +206,7 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
 .steps p { color: var(--body); text-wrap: pretty; }
 .steps a { color: var(--ink); font-weight: 500; }
 .steps code { font-size: 0.88em; color: var(--ink); }
+.steps .or { margin-top: 20px; }
 .code { position: relative; margin-top: 12px; background: var(--wash); border-radius: 10px; }
 .code pre { margin: 0; padding: 14px 76px 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.6; }
 .copy {
@@ -255,6 +256,8 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
   .note { font-size: 12.5px; }
   .features { grid-template-columns: 1fr; gap: 28px; padding-bottom: 72px; }
   .install { padding-bottom: 72px; }
+  /* Long commands scroll sideways here, so give the Copy button its own row above them. */
+  .code pre { padding: 46px 16px 14px; }
   .keys { gap: 10px 16px; font-size: 15px; }
 }
 
@@ -366,10 +369,11 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
     <h2>Install</h2>
     <ol class="steps">
       <li>
-        <p><a href="https://github.com/mihaicristianfarcas/explainit/releases/latest">Download ExplainIt</a>, unzip it and move it to Applications. It's signed and notarized by Apple.</p>
-      </li>
-      <li>
-        <p>Link the command that ships inside it, and make sure <code>~/.local/bin</code> is on your <code>PATH</code>.</p>
+        <p>Install it with Homebrew. It's signed and notarized by Apple.</p>
+        <div class="code"><pre><code>brew tap mihaicristianfarcas/explainit \
+  https://github.com/mihaicristianfarcas/explainit
+brew install --cask explainit</code></pre><button class="copy" type="button" hidden>Copy</button></div>
+        <p class="or">Or <a href="https://github.com/mihaicristianfarcas/explainit/releases/latest">download it</a>, move it to Applications, and link the command inside it into a folder on your <code>PATH</code>:</p>
         <div class="code"><pre><code>mkdir -p ~/.local/bin
 ln -s /Applications/ExplainIt.app/Contents/Helpers/explainit \
   ~/.local/bin/explainit</code></pre><button class="copy" type="button" hidden>Copy</button></div>

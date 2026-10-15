@@ -44,5 +44,9 @@ xcrun stapler staple "$APP"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 spctl --assess --type execute --verbose=2 "$APP"
-echo "SHA-256: $(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+SHA=$(shasum -a 256 "$ZIP" | cut -d' ' -f1)
+# The Homebrew cask installs this exact zip from the GitHub release.
+sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/explainit.rb
+echo "SHA-256: $SHA"
 echo "Ready: $ZIP"
+echo "Updated Casks/explainit.rb; commit it after publishing the GitHub release."
