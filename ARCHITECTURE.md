@@ -60,7 +60,7 @@ packaging/Asides.entitlements   microphone entitlement (required by the hardened
 packaging/download/   the Cloudflare Worker that serves the website's disk image (static files only)
 scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh, release.sh,
                       make-dmg.sh, publish-dmg.sh
-docs/                 the website (GitHub Pages): index.html, favicon.svg, og.png
+docs/                 the website (GitHub Pages): index.html, wallpaper.webp, favicon.svg, og.png
 Casks/asides.rb       the Homebrew cask; the repository doubles as a tap
 ```
 
