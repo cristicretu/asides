@@ -30,6 +30,7 @@ use objc2::MainThreadMarker;
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+use tray_icon::TrayIconEvent;
 use tray_icon::menu::MenuEvent;
 
 use crate::environment::Environment;
@@ -106,6 +107,8 @@ fn main() {
     let mtm = MainThreadMarker::new().expect("must start on the main thread");
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     event_loop.set_activation_policy(ActivationPolicy::Accessory);
+    // tao activates the app at launch by default; a background menu-bar app must not take focus.
+    event_loop.set_activate_ignoring_other_apps(false);
     let proxy = event_loop.create_proxy();
 
     let p = proxy.clone();
@@ -116,6 +119,8 @@ fn main() {
     MenuEvent::set_event_handler(Some(move |e| {
         let _ = p.send_event(UserEvent::Menu(e));
     }));
+    // Unused, but without a handler every hover over the icon would queue an event forever.
+    TrayIconEvent::set_event_handler(Some(|_| {}));
 
     let mut app = App::new(mtm, proxy);
     event_loop.run(move |event, _, control_flow| {
