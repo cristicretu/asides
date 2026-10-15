@@ -15,3 +15,4 @@ path = "src/main.rs"
 explainit-core.workspace = true
 anyhow.workspace = true
 clap = { version = "4.6", features = ["derive"] }
+libc = "0.2"

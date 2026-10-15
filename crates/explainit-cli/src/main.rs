@@ -57,6 +57,9 @@ enum Command {
 }
 
 fn main() {
+    // Rust ignores SIGPIPE, which turns `explainit status | head -1` into a panic. Behave like other
+    // command-line tools instead: exit quietly when the reader goes away.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     if let Err(err) = run(Cli::parse()) {
         eprintln!("explainit: {err:#}");
         std::process::exit(1);
