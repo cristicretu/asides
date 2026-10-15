@@ -3,9 +3,11 @@ VERSION    := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 APP        := dist/$(APP_NAME).app
 APPS_DIR   ?= $(HOME)/Applications
 BIN_DIR    ?= $(HOME)/.local/bin
-# A stable signing identity keeps the microphone permission across rebuilds (see `make cert`);
-# without it the app is signed ad hoc and macOS asks again after every install.
-SIGN_ID    ?= $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q '"ExplainIt Dev"' && echo "ExplainIt Dev" || echo -)
+# A stable signing identity keeps the microphone permission across rebuilds. Picked automatically:
+# Developer ID Application, Apple Development, "ExplainIt Dev" (`make cert`), else ad hoc ("-").
+SIGN_ID    ?= $(shell scripts/signing-identity.sh)
+# Hardened runtime everywhere; the app's entitlements allow the microphone.
+CODESIGN   := codesign --force --options runtime --timestamp=none --sign "$(SIGN_ID)"
 FEATURES   ?=
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 CARGO_FEATURES := $(if $(FEATURES),--features explainit-app/$(FEATURES))
@@ -29,8 +31,10 @@ bundle: build
 	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	sed 's/__VERSION__/$(VERSION)/g' packaging/Info.plist > $(APP)/Contents/Info.plist
 	cp target/release/explainit-app $(APP)/Contents/MacOS/$(APP_NAME)
-	codesign --force --sign "$(SIGN_ID)" $(APP)
-	@echo "Bundled $(APP) (signed: $(SIGN_ID))"
+	$(CODESIGN) --entitlements packaging/ExplainIt.entitlements $(APP)
+	cp target/release/explainit dist/explainit
+	$(CODESIGN) dist/explainit
+	@echo "Bundled $(APP) and dist/explainit (signed: $(SIGN_ID))"
 
 install: bundle
 	-@test -x $(BIN_DIR)/explainit && $(BIN_DIR)/explainit quit >/dev/null 2>&1; sleep 1
@@ -40,7 +44,7 @@ install: bundle
 	ditto $(APP) $(APPS_DIR)/$(APP_NAME).app
 	-@$(LSREGISTER) -u $(CURDIR)/$(APP) 2>/dev/null
 	$(LSREGISTER) -f $(APPS_DIR)/$(APP_NAME).app
-	install -m 755 target/release/explainit $(BIN_DIR)/explainit
+	install -m 755 dist/explainit $(BIN_DIR)/explainit
 	@echo "Installed $(APPS_DIR)/$(APP_NAME).app and $(BIN_DIR)/explainit"
 
 uninstall:
@@ -55,7 +59,7 @@ e2e: fixtures
 	$(MAKE) install FEATURES=dev-hooks
 	scripts/e2e.sh
 
-# Creates the self-signed "ExplainIt Dev" code-signing certificate (asks for your login password once).
+# Without an Apple certificate: creates a self-signed "ExplainIt Dev" identity (asks for your password once).
 cert:
 	scripts/make-signing-cert.sh
 
