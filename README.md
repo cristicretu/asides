@@ -38,7 +38,7 @@ A few seconds later the transcript is in the note, and the menu-bar icon shows `
 
 Download `ExplainIt-<version>.zip` from the
 [Releases page](https://github.com/mihaicristianfarcas/explainit/releases). Releases are signed and
-notarized by Apple. Unzip it, move `ExplainIt.app` to `/Applications`, and link the command that
+notarized by Apple, and run on Apple silicon Macs. Unzip it, move `ExplainIt.app` to `/Applications`, and link the command that
 ships inside it:
 
 ```bash
