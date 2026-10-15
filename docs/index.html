@@ -52,17 +52,19 @@ code, pre { font-family: var(--mono); }
 
 .wrap { width: 100%; max-width: 1040px; margin: 0 auto; padding: 0 24px; }
 
-kbd {
+/* Key caps and inline code share one quiet badge, a little smaller than the text around it. */
+kbd, :not(pre) > code {
   display: inline-block;
-  padding: 0 0.35em;
-  font: 500 1em/1.3 var(--sans);
+  padding: 0 0.3em;
+  font-size: 0.88em;
+  line-height: 1.35;
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--line);
-  border-bottom-width: 2px;
-  border-radius: 6px;
+  border-radius: 5px;
   white-space: nowrap;
 }
+kbd { font-family: var(--sans); }
 
 /* Header */
 .top { display: flex; align-items: center; justify-content: space-between; height: 72px; }
@@ -71,8 +73,8 @@ kbd {
 .nav { color: var(--muted); text-decoration: none; transition: color 150ms ease; }
 
 /* Hero */
-.hero { padding-top: 48px; }
-h1 { font-weight: 600; letter-spacing: -0.01em; }
+.hero { padding-top: 80px; }
+h1 { margin-bottom: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .lede { max-width: 36em; color: var(--body); text-wrap: pretty; }
 .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; margin-top: 32px; }
 .button {
@@ -94,7 +96,9 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
 .fine { margin-top: 20px; color: var(--muted); text-wrap: balance; }
 
 /* Demo: a Mac screen drawn on a 1024 × 640 grid. --u is one unit of that grid, so the whole
-   desktop scales with the page. Its text is part of the picture and scales with it. */
+   desktop scales with the page. Its text is part of the picture and scales with it. On phones
+   the screen shows a square part of the desktop at --zoom, centred on --fx, --fy (set by the demo
+   as it goes) and kept within the screen's edges. */
 .demo { padding-top: 56px; }
 .device {
   margin: 0;
@@ -103,12 +107,21 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
   border-radius: 22px;
   box-shadow: 0 0 0 1px #2c2c2e inset, 0 32px 64px -28px rgba(0, 0, 0, 0.45);
 }
-.display { container-type: inline-size; border-radius: 12px; overflow: hidden; }
+.display { position: relative; container-type: inline-size; aspect-ratio: 1024 / 640; border-radius: 12px; overflow: hidden; }
+.desk, .hud { --zoom: 1; --view-h: 640; --u: calc(100cqw * var(--zoom) / 1024); }
 .desk {
-  --u: calc(100cqw / 1024);
-  position: relative;
-  aspect-ratio: 1024 / 640;
+  --fx: 610;
+  --fy: 330;
+  --ox: clamp(0, calc(var(--fx) - 512 / var(--zoom)), calc(1024 - 1024 / var(--zoom)));
+  --oy: clamp(0, calc(var(--fy) - var(--view-h) / 2), calc(640 - var(--view-h)));
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(1024 * var(--u));
+  height: calc(640 * var(--u));
   overflow: hidden;
+  transform: translate(calc(var(--ox) * var(--u) * -1), calc(var(--oy) * var(--u) * -1));
+  transition: transform 900ms cubic-bezier(0.45, 0, 0.2, 1);
   background: #3d7fd0 url(wallpaper.webp) 50% 100% / cover;
   font: 400 calc(13 * var(--u))/1.3 var(--sans);
   color: #1d1d1f;
@@ -427,23 +440,10 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
 h2 { font-weight: 600; }
 .steps, .steps li { display: flex; flex-direction: column; gap: var(--gap); }
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
-.steps li { position: relative; padding-left: 40px; counter-increment: step; }
-.steps li::before {
-  content: counter(step);
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 26px;
-  height: 26px;
-  font: 600 var(--size)/26px var(--sans);
-  text-align: center;
-  color: var(--paper);
-  background: var(--ink);
-  border-radius: 50%;
-}
+.steps li { position: relative; padding-left: 1.6em; counter-increment: step; }
+.steps li::before { content: counter(step) "."; position: absolute; top: 0; left: 0; color: var(--ink); }
 .steps p { color: var(--body); text-wrap: pretty; }
 .steps a { color: var(--ink); font-weight: 500; }
-.steps code, .after code { color: var(--ink); }
 .code { position: relative; background: var(--wash); border-radius: 10px; }
 .code pre { margin: 0; padding: 16px 92px 16px 18px; overflow-x: auto; line-height: 1.6; }
 .copy {
@@ -487,22 +487,24 @@ h2 { font-weight: 600; }
   :root { --gap: 20px; }
   .wrap { padding: 0 20px; }
   .top { height: 60px; }
-  .hero { padding-top: 32px; }
+  .hero { padding-top: 48px; }
   .demo { padding-top: 40px; }
   .device { padding: 5px; border-radius: 13px; }
-  .display { border-radius: 8px; }
-  .features { grid-template-columns: 1fr; gap: 28px; padding-top: 72px; }
+  .display { aspect-ratio: 1; border-radius: 8px; }
+  .desk, .hud { --zoom: 2; --view-h: 512; }
+  .features { grid-template-columns: 1fr; gap: 28px; padding-top: 64px; }
   .install { padding-top: 72px; }
-  /* Long commands scroll sideways here, so give the Copy button its own row above them. */
-  .code pre { padding: 54px 16px 16px; }
+  /* Long commands scroll sideways here, at the badges' size; copying them on a phone is rare. */
+  .code pre { padding: 14px 16px; font-size: 0.88em; }
+  .copy { display: none; }
   .keys { gap: 12px 16px; }
   .foot { margin-top: 72px; }
 }
 
-.desk.instant * { transition: none !important; }
+.desk.instant, .desk.instant * { transition: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
-  .desk *, .say, .say .w { transition-duration: 0ms !important; }
+  .desk, .desk *, .say, .say .w { transition-duration: 0ms !important; }
 }
 </style>
 </head>
@@ -676,12 +678,12 @@ And the Pay button text wraps.</pre></div>
           </div>
 
           <div class="shot"></div>
-          <div class="hud"></div>
           <div class="pointer">
             <svg class="arrow" viewBox="0 0 24 24"><path d="M5 3v16.2l4.3-4.1 2.8 6.5 3-1.3-2.8-6.4h6z" fill="#000" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
             <svg class="cross" viewBox="0 0 22 22" fill="none" stroke-linecap="round"><path d="M11 1v20M1 11h20" stroke="#fff" stroke-width="3"/><path d="M11 1v20M1 11h20" stroke="#000" stroke-width="1.2"/></svg>
           </div>
         </div>
+        <div class="hud" aria-hidden="true"></div>
       </div>
     </figure>
     <div class="caption">
@@ -785,7 +787,7 @@ ln -s /Applications/Asides.app/Contents/Helpers/asides \
   const editor = $('.editor');
   const doc = $('.doc pre');
   const shot = $('.shot');
-  const hud = $('.hud');
+  const hud = device.querySelector('.hud');
   const pointer = $('.pointer');
   const say = document.querySelector('.say');
   const replay = document.querySelector('.replay');
@@ -807,6 +809,12 @@ ln -s /Applications/Asides.app/Contents/Helpers/asides \
     const r = el.getBoundingClientRect();
     const k = 1024 / d.width;
     return [(r.left - d.left + r.width * fx) * k + dx, (r.top - d.top + r.height * fy) * k + dy];
+  }
+
+  // Where the screen centres on phones, which show only part of the desktop.
+  function look(x, y) {
+    desk.style.setProperty('--fx', x);
+    desk.style.setProperty('--fy', y);
   }
 
   function moveTo([x, y], ms) {
@@ -871,8 +879,9 @@ ln -s /Applications/Asides.app/Contents/Helpers/asides \
     say.innerHTML = '';
     micOn.hidden = true;
     show('idle', '');
+    look(696, 256);
     pointer.className = 'pointer on';
-    moveTo(spot($('.form .field'), 0.6, 0.5), 0);
+    moveTo([560, 470], 0);
     desk.getBoundingClientRect();
     desk.classList.remove('instant');
   }
@@ -940,6 +949,7 @@ ln -s /Applications/Asides.app/Contents/Helpers/asides \
       show('done', '#5');
       await wait(400, id);
 
+      look(768, 256);
       moveTo(spot(status, 0.5, 0.6), 900);
       await wait(1050, id);
       await click(id);
@@ -966,6 +976,7 @@ ln -s /Applications/Asides.app/Contents/Helpers/asides \
       desk.dataset.app = 'textedit';
       safari.classList.add('inactive');
       editor.classList.add('open');
+      look(610, 330);
       moveTo(spot(editor, 0.75, 0.6), 700);
       // The front matter first, then down to the new entry.
       await wait(2200, id);

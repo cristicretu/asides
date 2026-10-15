@@ -176,8 +176,8 @@ certificate in your keychain.
 `docs/` is the landing page, served by GitHub Pages from the `docs/` folder on `main`. It's one
 static `index.html` with inline CSS and JavaScript and no build step: open it in a browser to
 preview it (`python3 -m http.server -d docs` serves it at http://localhost:8000). The demo is a
-Mac desktop drawn on a 1024 × 640 grid that scales with the page; `wallpaper.webp` is its
-background. `og.png` is the 1200×630 image shown when the link is shared. Pushes to `main` that
+Mac desktop drawn on a 1024 × 640 grid that scales with the page; on phones it shows a zoomed,
+square part of it that follows the action. `wallpaper.webp` is its background. `og.png` is the 1200×630 image shown when the link is shared. Pushes to `main` that
 only change `docs/` skip CI; pull requests always run it.
 
 The page repeats the shortcuts, requirements and install steps from the README, so update both
