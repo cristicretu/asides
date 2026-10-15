@@ -12,13 +12,16 @@ Line Tools and CMake (`brew install cmake`). Full Xcode isn't required.
 
 ```bash
 git clone https://github.com/mihaicristianfarcas/explainit && cd explainit
-make cert        # once: a stable signing identity, so the microphone permission survives rebuilds
-make install     # builds and installs ExplainIt.app and the explainit command
+make cert        # once, only if you have no Apple Development or Developer ID certificate
+make install     # builds, signs and installs ExplainIt.app and the explainit command
 make fixtures    # once: test audio generated with the macOS voices
 ```
 
-- `make cert` creates a self-signed "ExplainIt Dev" certificate in your login keychain and asks
-  for your password. Without it, macOS asks for the microphone after every `make install`.
+- `make install` signs with the best identity it finds (`scripts/signing-identity.sh`): Developer
+  ID Application, then Apple Development, then "ExplainIt Dev". A stable identity is what lets
+  macOS keep the microphone permission across rebuilds; with an ad hoc signature it asks after
+  every `make install`. `make cert` creates the self-signed "ExplainIt Dev" identity and asks for
+  your password.
 - `make fixtures` needs the Romanian voice "Ioana": System Settings → Accessibility → Spoken
   Content → System Voice → Manage Voices… The generated files are gitignored, because the macOS
   license doesn't allow redistributing system-voice audio.
@@ -86,7 +89,7 @@ in your pull request what you tried.
 - [ ] **Menu:**
   - the icon states: idle, red with a timer, ellipsis, `✓ #N`, warning
   - Directory switching: recent repos and Choose Directory… (focus returns to your previous app)
-  - every Preferences item persists to `config.toml`
+  - flipping a Preferences switch leaves the menu open and is saved to `config.toml`
 - [ ] **Robustness:**
   - a recording started while the previous one is still transcribing
   - AirPods as the microphone
@@ -101,11 +104,13 @@ in your pull request what you tried.
   1. Add the field to `Config` in `config.rs`, with a default so older `config.toml` files still
      load.
   2. Read it where it's needed in the app.
-  3. If it's a toggle, add it to the menu (below).
+  3. If it's an on/off setting, add a `Preference` variant in `tray.rs` (`ALL`, `title`, `get`,
+     `set`); it gets a switch row in the menu automatically.
   4. Document it in the README's Settings block.
 - **A menu item:**
   1. Add a `MenuAction` variant and the item in `tray.rs` (`Tray::new`, `Tray::action`, and
-     `show` or `sync_config` if its state changes).
+     `show` or `sync_config` if its state changes). Standard items close the menu when clicked;
+     use a switch row (`toggles.rs`) for anything the user may want to flip several times.
   2. Handle the action in `App::on_menu`.
   3. Escape `&` in dynamic text with `menu_text`.
 - **A CLI command:**

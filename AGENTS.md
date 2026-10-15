@@ -45,6 +45,11 @@ changes.
   gitignored; keep them that way.
 - **Never edit the user's notes** in `.explainit/`.
 - **Don't run `make cert`** unless asked. It changes the login keychain and prompts for a password.
+- **Keep the stable signing.** `make bundle` picks the identity with `scripts/signing-identity.sh`
+  and signs with the hardened runtime. Don't fall back to ad hoc (the microphone permission would
+  reset every build), and add an entitlement for any new capability.
+- **Check `explainit status` before `make install` or `make e2e`.** If it says recording or
+  transcribing, the user is in the middle of something: don't reinstall.
 - **Tell the user what `make install` and `make e2e` did.** Both quit the running ExplainIt and
   replace the installed app, and `make e2e` installs a test build with dev hooks. Afterwards run
   `make install` to restore a normal build, and tell the user to run `explainit` again.
@@ -103,6 +108,14 @@ The user may record a request and ask you to "implement the note". Find it with
 - An `Esc` key equivalent on a menu item would cancel the recording when Esc closes the menu, so
   the shortcut is shown in the item's label instead.
 - `say -o x.aiff --data-format=LEI16@16000` fails; use `--file-format=WAVE`.
+- tao activates the app at launch unless `set_activate_ignoring_other_apps(false)`; a menu-bar app
+  must not take focus.
+- Changing the status item's icon or title, or a menu item's text, while the menu is open does
+  **not** close it (tested). Look elsewhere if the menu closes unexpectedly: focus or activation
+  changes, or system prompts.
+- Clicking a standard menu item always closes the menu; view-based items (`toggles.rs`) don't.
+- Without a `TrayIconEvent` handler, tray-icon queues an event for every mouse move over the icon,
+  forever.
 - Apple's SpeechAnalyzer and FoundationModels are Swift-only, so Rust can't call them without a
   Swift shim.
 

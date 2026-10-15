@@ -46,7 +46,8 @@ crates/
     main.rs           clap subcommands, `open -g -b <bundle id> <link>`, waits for the app to acknowledge
   explainit-app/      binary `explainit-app`, renamed ExplainIt inside the bundle
     main.rs           App: event loop, UserEvent dispatch, recording state machine, bind(), refresh(), publish()
-    tray.rs           status item and menu (MenuAction, View, Directory submenu)
+    tray.rs           status item and menu (MenuAction, Preference, View, Directory submenu)
+    toggles.rs        switch rows for on/off preferences (view-based items keep the menu open)
     icons.rs          SF Symbols rendered to RGBA for tray-icon
     hotkeys.rs        global shortcuts (Carbon hot keys); Esc registered only while recording
     audio.rs          cpal microphone capture → mono f32 at the device rate
@@ -56,7 +57,8 @@ crates/
     environment.rs    macOS version, frontmost or last-active browser, display (note metadata)
     macos.rs          microphone permission, folder picker, sounds, open/reveal
 packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL scheme
-scripts/              e2e.sh, make-fixtures.sh, make-signing-cert.sh
+packaging/ExplainIt.entitlements   microphone entitlement (required by the hardened runtime)
+scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh
 ```
 
 ## Threads and how they talk
@@ -130,7 +132,10 @@ Break these only on purpose, and update this document when you do.
    attributes the microphone permission to the terminal, and the app dies with the terminal.
 9. **Binary names must differ by more than letter case.** On case-insensitive APFS,
    `explainit` and `ExplainIt` in `target/release/` are the same file.
-10. **No new permissions without discussion.** Today ExplainIt needs only the microphone (plus the
+10. **Signed with a stable identity and the hardened runtime.** macOS ties the microphone
+    permission to the signing identity, so ad hoc signatures re-prompt after every build. Under the
+    hardened runtime every capability needs an entitlement (`packaging/ExplainIt.entitlements`).
+11. **No new permissions without discussion.** Today ExplainIt needs only the microphone (plus the
     optional clipboard prompt). Features that would require Accessibility, Input Monitoring or
     Screen Recording change what users must trust.
 
@@ -160,5 +165,8 @@ Break these only on purpose, and update this document when you do.
 - **SF Symbols rendered to bitmaps.** tray-icon takes RGBA; rendering system symbols keeps the
   icons native in light and dark menu bars. tray-icon caps icons at 22 pt, so they are drawn on a
   22 pt canvas at 2×.
+- **Switch rows for preferences.** Standard menu items close the menu when clicked; items with a
+  custom view don't, so on/off preferences are switch rows (as in Control Center). muda has no
+  view-based items, so `Tray::new` inserts them into the Preferences `NSMenu` directly.
 - **Shortcuts through Carbon hot keys** (global-hotkey). They need no Accessibility permission,
   and they report key-up, which makes hold-to-talk possible.

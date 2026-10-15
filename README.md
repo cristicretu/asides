@@ -43,10 +43,12 @@ Make sure `~/.local/bin` is on your `PATH`. On first launch, ExplainIt asks for 
 and downloads the speech model (574 MB, checksum-verified) to
 `~/Library/Application Support/ExplainIt/models/`.
 
-`make install` signs the app ad hoc. macOS then treats every rebuild as a new app and asks for the
-microphone again. To avoid that, run `make cert` once: it creates a self-signed "ExplainIt Dev"
-code-signing certificate in your login keychain and asks for your password. Later installs are
-signed with it.
+`make install` signs both binaries with the hardened runtime, using the best identity in your
+keychain: a Developer ID Application certificate, then an Apple Development one, then a
+self-signed "ExplainIt Dev" one. Any of these keeps the microphone permission across updates.
+Without one, the app is signed ad hoc: macOS treats every rebuild as a new app and asks for the
+microphone again. If you don't have an Apple certificate, run `make cert` once. It creates the
+self-signed identity in your login keychain and asks for your password.
 
 `make uninstall` removes the app and the command. Settings and models stay in
 `~/Library/Application Support/ExplainIt`.
@@ -86,8 +88,8 @@ The icon shows what's happening: idle, recording (red, with a timer), transcribi
 - start, stop or cancel recordings, or attach the clipboard image
 - switch between recently used repos, or choose another one (**Directory** submenu)
 - open, reveal or copy the path of the latest note
-- change preferences: hold to talk, auto-attaching images, sounds, keeping audio clips, the speech
-  model and the microphone
+- flip the on/off preferences (hold to talk, auto-attaching images, sounds, keeping audio clips)
+  with switches that leave the menu open, and choose the speech model and the microphone
 
 ## Notes
 
@@ -170,7 +172,8 @@ more reliable; a single entry skips detection altogether.
 
 ## Troubleshooting
 
-- **macOS asks for the microphone after every update.** Run `make cert` once (see Install).
+- **macOS asks for the microphone after every update.** The app is signed ad hoc. Run `make cert`
+  once, or install an Apple Development or Developer ID certificate (see Install).
 - **A shortcut does nothing.** Another app may already use it. Pick another in `config.toml`.
   macOS refuses shortcuts whose only modifier is Option, or Option and Shift.
 - **"Nothing heard."** Check Preferences → Microphone. Bluetooth headsets take about a second to
