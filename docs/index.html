@@ -95,19 +95,18 @@ h1 {
 .button svg { width: 16px; height: 16px; }
 .button:active { transform: scale(0.97); }
 .more { font-size: 16px; font-weight: 500; text-decoration: none; }
-.more span { display: inline-block; transition: transform 200ms var(--ease-out); }
 .fine { margin-top: 20px; font-size: 14px; color: var(--muted); text-wrap: balance; }
 
 /* Demo */
 .demo { padding-bottom: 88px; }
 .screen { margin: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--paper); }
 .menubar {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 14px;
+  justify-content: space-between;
   height: 30px;
-  padding: 0 12px;
+  padding: 0 10px 0 16px;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   background: var(--wash);
@@ -122,7 +121,24 @@ h1 {
 .status[data-state="done"] .i-done { display: block; }
 .status[data-state="rec"] .i-rec .dot { animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.35; } }
-.clock { color: var(--body); }
+.menus, .extras { display: flex; align-items: center; }
+.menus { gap: 18px; }
+.menus b { font-weight: 600; }
+.extras { gap: 12px; }
+.notch {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: clamp(64px, 15%, 112px);
+  height: 100%;
+  transform: translateX(-50%);
+  background: #000;
+  border-radius: 0 0 9px 9px;
+}
+/* The small concave fillets where the notch meets the top edge. */
+.notch::before, .notch::after { content: ""; position: absolute; top: 0; width: 6px; height: 6px; }
+.notch::before { left: -6px; background: radial-gradient(circle at 0 100%, transparent 5.5px, #000 6px); }
+.notch::after { right: -6px; background: radial-gradient(circle at 100% 100%, transparent 5.5px, #000 6px); }
 .file { padding: 14px 20px 22px; }
 .path {
   margin-bottom: 16px;
@@ -220,7 +236,6 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
 @media (hover: hover) and (pointer: fine) {
   .nav:hover, .replay:hover { color: var(--ink); }
   .button:hover { background: #2c2c2e; }
-  .more:hover span { transform: translateX(3px); }
   .copy:hover { border-color: #c7c7cc; }
   .foot a:hover { text-decoration: underline; }
 }
@@ -233,16 +248,23 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
   .lede { font-size: 1.1rem; }
   .demo { padding-bottom: 64px; }
   .file { padding: 12px 14px 18px; }
+  .menubar { padding: 0 6px 0 12px; }
+  .menus { gap: 14px; }
+  .menubar .wide { display: none; }
   .note { font-size: 12.5px; }
   .features { grid-template-columns: 1fr; gap: 28px; padding-bottom: 72px; }
   .install { padding-bottom: 72px; }
   .keys { gap: 10px 16px; font-size: 15px; }
 }
 
+@media (max-width: 359px) {
+  .menubar .mid { display: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .entry > p, .entry.hidden > p { transform: none; filter: none; }
   .status[data-state="rec"] .i-rec .dot { animation: none; }
-  .more span, kbd { transition: none; }
+  kbd { transition: none; }
 }
 </style>
 </head>
@@ -273,14 +295,24 @@ h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; }
   <section class="wrap demo" aria-label="Example: one recording">
     <figure class="screen" id="demo">
       <div class="menubar" aria-hidden="true">
-        <span class="status" data-state="done">
-          <svg class="i-idle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></svg>
-          <svg class="i-rec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle class="dot" cx="12" cy="12" r="5" fill="currentColor" stroke="none"/></svg>
-          <svg class="i-busy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><g fill="currentColor" stroke="none"><circle cx="7.75" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="16.25" cy="12" r="1.4"/></g></svg>
-          <svg class="i-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.75 2.75L16.25 9.5"/></svg>
-          <span class="status-title">#5</span>
-        </span>
-        <span class="clock">Wed 15 Oct 14:38</span>
+        <div class="menus">
+          <b>Safari</b>
+          <span class="mid">File</span>
+          <span class="wide">Edit</span>
+          <span class="wide">View</span>
+          <span class="wide">History</span>
+        </div>
+        <span class="notch"></span>
+        <div class="extras">
+          <span class="status" data-state="done">
+            <svg class="i-idle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></svg>
+            <svg class="i-rec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle class="dot" cx="12" cy="12" r="5" fill="currentColor" stroke="none"/></svg>
+            <svg class="i-busy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><g fill="currentColor" stroke="none"><circle cx="7.75" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="16.25" cy="12" r="1.4"/></g></svg>
+            <svg class="i-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.75 2.75L16.25 9.5"/></svg>
+            <span class="status-title">#5</span>
+          </span>
+          <span class="clock"><span class="wide">Wed 15 Oct&nbsp;</span>14:38</span>
+        </div>
       </div>
       <div class="file">
         <div class="path">~/code/shop/.explainit/2026-10-15-1432 Checkout session/notes.md</div>
@@ -414,12 +446,13 @@ ln -s /Applications/ExplainIt.app/Contents/Helpers/explainit \
     say.classList.remove('swap');
   }
 
-  async function press(id) {
+  // Holds the caption's key down for a moment; onDown runs as it goes down.
+  async function press(id, onDown) {
     const key = say.querySelector('kbd');
-    if (!key) return;
-    key.classList.add('pressed');
-    await wait(160, id);
-    key.classList.remove('pressed');
+    key?.classList.add('pressed');
+    onDown?.();
+    await wait(380, id);
+    key?.classList.remove('pressed');
   }
 
   async function speak(sentence, id) {
@@ -441,29 +474,33 @@ ln -s /Applications/ExplainIt.app/Contents/Helpers/explainit \
     show('idle', '');
     try {
       await caption('Notice a bug. Press <kbd>⌃⌥Space</kbd>.', id);
-      await wait(1100, id);
-      await press(id);
-
-      const start = Date.now();
-      show('rec', '0:00');
-      timer = setInterval(() => {
-        const s = Math.floor((Date.now() - start) / 1000);
-        title.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-      }, 200);
+      await wait(1600, id);
+      await press(id, () => {
+        const start = Date.now();
+        show('rec', '0:00');
+        timer = setInterval(() => {
+          const s = Math.floor((Date.now() - start) / 1000);
+          title.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        }, 200);
+      });
+      await wait(700, id);
       await speak(sentences[0], id);
-      await wait(700, id);
-      await caption('<kbd>⌃⇧⌘4</kbd> Screenshot copied while you talk.', id);
-      await wait(1200, id);
-      await speak(sentences[1], id);
-      await wait(700, id);
-      await caption('<kbd>⌃⌥Space</kbd> again to stop.', id);
-      await wait(250, id);
-      await press(id);
-
-      clearInterval(timer);
-      show('busy', '');
-      await caption('Transcribing on your Mac…', id);
+      await wait(900, id);
+      await caption('<kbd>⌃⇧⌘4</kbd> Copy a screenshot while you talk.', id);
       await wait(1000, id);
+      await press(id);
+      await wait(1400, id);
+      await speak(sentences[1], id);
+      await wait(900, id);
+      await caption('Press <kbd>⌃⌥Space</kbd> again to stop.', id);
+      await wait(1500, id);
+      await press(id, () => {
+        clearInterval(timer);
+        show('busy', '');
+      });
+      await wait(700, id);
+      await caption('Transcribing on your Mac…', id);
+      await wait(1200, id);
 
       show('done', '#5');
       entry.querySelectorAll('p').forEach((p, i) => { p.style.transitionDelay = `${i * 70}ms`; });
