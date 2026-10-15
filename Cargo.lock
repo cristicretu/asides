@@ -115,6 +115,7 @@ dependencies = [
  "cpal",
  "global-hotkey",
  "hound",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",
@@ -134,8 +135,11 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "asides-core",
+ "chrono",
  "clap",
  "libc",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

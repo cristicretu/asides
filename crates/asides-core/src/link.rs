@@ -16,6 +16,10 @@ pub enum Link {
         request: Option<String>,
     },
     Quit,
+    /// Send to Agent: hands the entries recorded so far to agents listening in batch mode.
+    Send {
+        request: Option<String>,
+    },
     /// Development hook: process `wav` as if it had just been recorded.
     Simulate {
         wav: PathBuf,
@@ -45,6 +49,11 @@ impl Link {
                     }
                 }
                 Link::Quit => {}
+                Link::Send { request } => {
+                    if let Some(request) = request {
+                        q.append_pair("req", request);
+                    }
+                }
                 Link::Simulate { wav, new_note, image, image_at, request } => {
                     q.append_pair("wav", &wav.to_string_lossy());
                     if *new_note {
@@ -77,6 +86,7 @@ impl Link {
                 request: get("req"),
             }),
             "quit" => Some(Link::Quit),
+            "send" => Some(Link::Send { request: get("req") }),
             "simulate" => Some(Link::Simulate {
                 wav: get("wav")?.into(),
                 new_note: flag("new"),
@@ -92,6 +102,7 @@ impl Link {
         match self {
             Link::Bind { .. } => "bind",
             Link::Quit => "quit",
+            Link::Send { .. } => "send",
             Link::Simulate { .. } => "simulate",
         }
     }
@@ -116,6 +127,8 @@ mod tests {
         });
         round_trip(Link::Bind { dir: "/x".into(), new_note: false, title: None, request: None });
         round_trip(Link::Quit);
+        round_trip(Link::Send { request: Some("r2".into()) });
+        round_trip(Link::Send { request: None });
         round_trip(Link::Simulate {
             wav: "/tmp/a b.wav".into(),
             new_note: false,

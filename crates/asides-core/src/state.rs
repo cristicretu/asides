@@ -23,7 +23,21 @@ pub struct AppState {
     pub last_request: Option<String>,
     /// Directories bound recently, most recent first (shown in the menu for quick switching).
     pub recent_dirs: Vec<PathBuf>,
+    /// The last Send to Agent: agents listening in batch mode deliver everything up to it.
+    pub agent_send: Option<AgentSend>,
     pub updated_ms: u64,
+}
+
+/// Marks the end of a batch: the entries of `dir`'s notes up to entry `entry` of `note` (a note
+/// folder), all of them transcribed by the time it was published.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentSend {
+    /// Milliseconds since the Unix epoch; tells one send from the next, across app restarts.
+    pub at_ms: u64,
+    pub dir: PathBuf,
+    pub note: Option<PathBuf>,
+    pub entry: u32,
 }
 
 /// How many directories the menu offers for quick switching.
@@ -73,6 +87,7 @@ mod tests {
             status: "idle".into(),
             last_request: Some("abc".into()),
             recent_dirs: vec!["/x".into(), "/y".into()],
+            agent_send: Some(AgentSend { at_ms: 7, dir: "/x".into(), note: Some("/x/.asides/n".into()), entry: 3 }),
             ..Default::default()
         };
         state.write(&path).unwrap();
@@ -84,7 +99,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("state.json");
         fs::write(&path, r#"{"pid": 1, "status": "idle"}"#).unwrap();
-        assert_eq!(AppState::read(&path).unwrap().recent_dirs, Vec::<PathBuf>::new());
+        let state = AppState::read(&path).unwrap();
+        assert_eq!((state.recent_dirs, state.agent_send), (Vec::<PathBuf>::new(), None));
     }
 
     #[test]

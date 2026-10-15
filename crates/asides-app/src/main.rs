@@ -9,21 +9,25 @@ mod icons;
 mod macos;
 mod stt;
 mod tray;
+mod watch;
 mod worker;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use asides_core::config::Config;
+use asides_core::agents::{self, Listener};
+use asides_core::config::{AgentDelivery, Config};
 use asides_core::link::Link;
 use asides_core::models::ModelSpec;
 use asides_core::notes;
 use asides_core::paths::{self, tilde};
 use asides_core::project;
-use asides_core::state::{self as app_state, AppState, PendingNew};
+use asides_core::state::{self as app_state, AgentSend, AppState, PendingNew};
+use asides_core::wispr::{self, Dictation};
 use chrono::{DateTime, Local};
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use objc2::MainThreadMarker;
@@ -39,7 +43,7 @@ use crate::icons::Icons;
 use crate::macos::Mic;
 use crate::stt::{ModelManager, ModelState};
 use crate::tray::{MenuAction, Tray, View};
-use crate::worker::{CapturedImage, ImageJob, Job, Outcome, RecordingJob};
+use crate::worker::{CapturedImage, DictationJob, ImageJob, Job, Outcome, RecordingJob};
 
 /// A press shorter than this toggles recording; a longer one is push-to-talk.
 const TAP_MAX: Duration = Duration::from_millis(350);
@@ -48,6 +52,8 @@ const FLASH: Duration = Duration::from_secs(2);
 const ERROR_ICON: Duration = Duration::from_secs(6);
 /// Recordings shorter than this (without images) are treated as accidental and dropped.
 const MIN_RECORDING_SECS: f32 = 0.3;
+/// An agent that stopped waiting this recently is still listening: it's working on the last asides.
+const LISTENING_GRACE_MS: u64 = 10 * 60 * 1000;
 
 enum UserEvent {
     HotKey(GlobalHotKeyEvent),
@@ -56,6 +62,8 @@ enum UserEvent {
     Model(&'static str, ModelState),
     Mic(bool),
     ConfigFileChanged,
+    Wispr(Result<Dictation, String>),
+    Listeners(Vec<Listener>),
 }
 
 struct Recording {
@@ -99,6 +107,13 @@ struct App {
     mic: Mic,
     keys_down: HashSet<u32>,
     last_request: Option<String>,
+    /// The last Send to Agent, published in `state.json` for `asides mcp`.
+    agent_send: Option<AgentSend>,
+    /// Send to Agent was chosen while recordings were still being transcribed.
+    pending_send: bool,
+    listeners: Vec<Listener>,
+    /// Set to stop watching Wispr Flow's history.
+    wispr: Option<Arc<AtomicBool>>,
     quit_when_idle: bool,
     quit: bool,
 }
@@ -160,6 +175,7 @@ impl App {
         let previous = AppState::read(&paths::state_path()).unwrap_or_default();
         let bound = previous.bound_dir.filter(|d| d.is_dir());
         let pending_new = bound.as_ref().and(previous.pending_new);
+        let agent_send = previous.agent_send;
         let mut recent_dirs: Vec<PathBuf> = previous.recent_dirs.into_iter().filter(|d| d.is_dir()).collect();
         if let Some(dir) = &bound {
             app_state::remember_dir(&mut recent_dirs, dir);
@@ -185,6 +201,10 @@ impl App {
             mic: macos::mic_status(),
             keys_down: HashSet::new(),
             last_request: None,
+            agent_send,
+            pending_send: false,
+            listeners: Vec::new(),
+            wispr: None,
             quit_when_idle: false,
             quit: false,
         }
@@ -200,7 +220,7 @@ impl App {
             Err(err) => eprintln!("could not create the status item: {err:#}"),
         }
         self.icons = Some(icons);
-        match Hotkeys::new(&self.config.shortcuts) {
+        match Hotkeys::new(&self.config.shortcuts, self.config.agent_delivery == AgentDelivery::Batch) {
             Ok(hotkeys) => {
                 if let Some(err) = hotkeys.errors.first() {
                     self.error = Some((Instant::now(), err.clone()));
@@ -216,6 +236,11 @@ impl App {
         }
         self.models.ensure(&self.config.model);
         self.watch_config();
+        let proxy = self.proxy.clone();
+        watch::listeners(paths::listeners_dir(), move |listeners| {
+            proxy.send_event(UserEvent::Listeners(listeners)).is_ok()
+        });
+        self.sync_wispr();
         self.refresh_latest();
         self.refresh();
         self.publish();
@@ -239,6 +264,12 @@ impl App {
                 self.publish();
             }
             UserEvent::ConfigFileChanged => self.reload_config(),
+            UserEvent::Wispr(Ok(dictation)) => self.add_dictation(dictation),
+            UserEvent::Wispr(Err(message)) => self.fail(message),
+            UserEvent::Listeners(listeners) => {
+                self.listeners = listeners;
+                self.refresh();
+            }
         }
     }
 
@@ -249,6 +280,11 @@ impl App {
                 self.bind(dir, new_note.then_some(PendingNew { title }));
             }
             Some(Link::Quit) => self.request_quit(),
+            Some(Link::Send { request }) => {
+                self.last_request = request;
+                self.send_to_agent();
+                self.publish();
+            }
             Some(Link::Simulate { wav, new_note, image, image_at, request }) => {
                 self.last_request = request;
                 #[cfg(feature = "dev-hooks")]
@@ -281,6 +317,7 @@ impl App {
                     Action::RecordNewNote => self.start_recording(true, Some((action, Instant::now()))),
                     Action::AttachImage => self.attach_image(),
                     Action::Cancel => self.cancel_recording(),
+                    Action::SendToAgent => self.send_to_agent(),
                 }
             }
             HotKeyState::Released => {
@@ -306,6 +343,7 @@ impl App {
             MenuAction::RecordNewNote => self.start_recording(true, None),
             MenuAction::AttachImage => self.attach_image(),
             MenuAction::Cancel => self.cancel_recording(),
+            MenuAction::SendToAgent => self.send_to_agent(),
             MenuAction::SwitchDirectory(dir) => self.bind_from_menu(&dir),
             MenuAction::ChooseDirectory => {
                 if let Some(dir) = macos::choose_directory(self.mtm, self.bound.as_deref()) {
@@ -319,6 +357,15 @@ impl App {
             MenuAction::ToggleAutoAttach => self.update_config(|c| c.auto_attach_images = checked),
             MenuAction::ToggleSounds => self.update_config(|c| c.sounds = checked),
             MenuAction::ToggleKeepAudio => self.update_config(|c| c.keep_audio = checked),
+            MenuAction::ToggleWisprFlow => {
+                self.update_config(|c| c.wispr_flow = checked);
+                self.sync_wispr();
+            }
+            MenuAction::AgentDelivery(mode) => {
+                self.update_config(|c| c.agent_delivery = mode);
+                self.apply_hotkeys();
+                self.refresh();
+            }
             MenuAction::Model(id) => {
                 self.update_config(|c| c.model = id.clone());
                 self.model_state = None;
@@ -354,6 +401,7 @@ impl App {
             Outcome::Failed(message) => self.fail(message),
         }
         self.refresh_latest();
+        self.flush_send();
         self.refresh();
         self.publish();
         if self.quit_when_idle && self.in_flight == 0 && self.recording.is_none() {
@@ -517,6 +565,110 @@ impl App {
         })));
     }
 
+    /// A Wispr Flow dictation becomes an entry, like a recording.
+    fn add_dictation(&mut self, dictation: Dictation) {
+        if !wispr::app_matches(dictation.app.as_deref(), &self.config.wispr_flow_apps) {
+            return;
+        }
+        let Some(dir) = self.bound.clone() else {
+            return self
+                .fail("A Wispr Flow dictation arrived, but no directory is bound. Run `asides` in a repo.".into());
+        };
+        if !dir.is_dir() {
+            return self.fail(format!("{} no longer exists. Run `asides` again.", dir.display()));
+        }
+        let new_note = self.pending_new.take().map(|p| p.title);
+        self.submit(Job::Dictation(Box::new(DictationJob {
+            dir,
+            text: dictation.text,
+            at: dictation.at.with_timezone(&Local),
+            source: "Wispr Flow",
+            new_note,
+            environment: environment::capture(self.mtm),
+        })));
+    }
+
+    /// Hands what's been recorded so far to agents listening in batch mode. A recording in
+    /// progress is stopped first, and the batch goes out once every recording is transcribed.
+    fn send_to_agent(&mut self) {
+        if self.bound.is_none() {
+            return self.fail("Not bound to a directory. Run `asides` in a repo first.".into());
+        }
+        if self.recording.is_some() {
+            self.stop_recording();
+        }
+        self.pending_send = true;
+        self.flush_send();
+    }
+
+    fn flush_send(&mut self) {
+        if !self.pending_send || self.in_flight > 0 {
+            return;
+        }
+        self.pending_send = false;
+        let Some(dir) = self.bound.clone() else { return };
+        let latest = notes::latest_note(&dir);
+        self.agent_send = Some(AgentSend {
+            at_ms: now_ms(),
+            entry: latest.as_ref().map_or(0, |n| n.next_entry_number() - 1),
+            note: latest.map(|n| n.dir),
+            dir,
+        });
+        let status = match self.listening() {
+            Some(agents) => format!("Sent to {agents}"),
+            None => "Sent, but no agent is listening right now".into(),
+        };
+        self.flash = Some((Instant::now() + FLASH, "Sent".into(), status));
+        self.sound("Glass");
+        self.refresh();
+        self.publish();
+    }
+
+    /// The agents listening in the bound directory, e.g. "Claude Code" or "Claude Code and Codex".
+    fn listening(&self) -> Option<String> {
+        let now = now_ms();
+        let mut names: Vec<String> = Vec::new();
+        for listener in &self.listeners {
+            let active = listener.waiting || now.saturating_sub(listener.updated_ms) < LISTENING_GRACE_MS;
+            let name = agents::client_label(&listener.client);
+            if active && Some(&listener.dir) == self.bound.as_ref() && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        match names.as_slice() {
+            [] => None,
+            [one] => Some(one.clone()),
+            [rest @ .., last] => Some(format!("{} and {last}", rest.join(", "))),
+        }
+    }
+
+    /// Starts or stops watching Wispr Flow's history to match the settings.
+    fn sync_wispr(&mut self) {
+        let source = self.wispr_source();
+        if source.is_some() == self.wispr.is_some() {
+            return;
+        }
+        if let Some(stop) = self.wispr.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        if let Some(db) = source {
+            let proxy = self.proxy.clone();
+            self.wispr = Some(watch::wispr_flow(db, move |found| proxy.send_event(UserEvent::Wispr(found)).is_ok()));
+        }
+    }
+
+    fn wispr_source(&self) -> Option<PathBuf> {
+        // The end-to-end test stands in for Wispr Flow with a database of its own.
+        #[cfg(feature = "dev-hooks")]
+        {
+            let test = paths::support_dir().join("test-wispr-flow.sqlite");
+            if test.is_file() {
+                return Some(test);
+            }
+        }
+        self.config.wispr_flow.then(wispr::default_db)
+    }
+
     fn submit(&mut self, job: Job) {
         self.in_flight += 1;
         if self.jobs.send(job).is_err() {
@@ -600,9 +752,10 @@ impl App {
         } else if let Some(p) = downloading {
             ("download", &icons.download, Some(format!("{p}%")), format!("Downloading speech model… {p}%"))
         } else if let Some(dir) = &dir_name {
-            let status = match &error_text {
-                Some(message) => format!("⚠ {message}"),
-                None => format!("Ready · {dir}"),
+            let status = match (&error_text, self.listening()) {
+                (Some(message), _) => format!("⚠ {message}"),
+                (None, Some(agents)) => format!("Ready · {dir} · {agents} listening"),
+                (None, None) => format!("Ready · {dir}"),
             };
             ("idle", &icons.idle, None, status)
         } else {
@@ -627,6 +780,11 @@ impl App {
             bound: self.bound.as_deref(),
             note_info,
             has_note: self.latest.is_some(),
+            send_label: match self.listening() {
+                Some(agents) if !agents.contains(" and ") => format!("Send to {agents}"),
+                _ => "Send to Agent".into(),
+            },
+            send_enabled: self.config.agent_delivery == AgentDelivery::Batch && self.bound.is_some(),
         };
         if let Some(tray) = &mut self.tray {
             tray.show(&view);
@@ -671,7 +829,8 @@ impl App {
             microphone: self.mic.as_str().into(),
             last_request: self.last_request.clone(),
             recent_dirs: self.recent_dirs.clone(),
-            updated_ms: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+            agent_send: self.agent_send.clone(),
+            updated_ms: now_ms(),
         };
         if let Err(err) = state.write(&paths::state_path()) {
             eprintln!("could not write state.json: {err}");
@@ -737,26 +896,32 @@ impl App {
         if config == self.config {
             return;
         }
-        if config.shortcuts != self.config.shortcuts
-            && let Some(hotkeys) = &mut self.hotkeys
-        {
-            hotkeys.apply(&config.shortcuts);
-            if self.recording.is_some() {
-                hotkeys.set_cancel_active(true);
-            }
-            if let Some(err) = hotkeys.errors.first() {
-                self.error = Some((Instant::now(), err.clone()));
-            }
-        }
+        let hotkeys_changed =
+            config.shortcuts != self.config.shortcuts || config.agent_delivery != self.config.agent_delivery;
         if config.model != self.config.model {
             self.model_state = None;
             self.models.ensure(&config.model);
         }
         self.config = config;
+        if hotkeys_changed {
+            self.apply_hotkeys();
+        }
+        self.sync_wispr();
         if let Some(tray) = &self.tray {
             tray.sync_config(&self.config);
         }
         self.refresh();
+    }
+
+    fn apply_hotkeys(&mut self) {
+        let Some(hotkeys) = &mut self.hotkeys else { return };
+        hotkeys.apply(&self.config.shortcuts, self.config.agent_delivery == AgentDelivery::Batch);
+        if self.recording.is_some() {
+            hotkeys.set_cancel_active(true);
+        }
+        if let Some(err) = hotkeys.errors.first() {
+            self.error = Some((Instant::now(), err.clone()));
+        }
     }
 
     fn watch_config(&self) {
@@ -824,6 +989,10 @@ impl App {
         })));
         Ok(())
     }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 fn entries(n: u32) -> String {

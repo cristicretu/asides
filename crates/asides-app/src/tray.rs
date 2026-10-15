@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use asides_core::config::{Config, pretty_shortcut};
+use asides_core::config::{AgentDelivery, Config, pretty_shortcut};
 use asides_core::models::MODELS;
 use asides_core::paths::tilde;
 use tray_icon::menu::accelerator::Accelerator;
@@ -18,6 +18,7 @@ pub enum MenuAction {
     RecordNewNote,
     AttachImage,
     Cancel,
+    SendToAgent,
     SwitchDirectory(PathBuf),
     ChooseDirectory,
     OpenNote,
@@ -27,6 +28,8 @@ pub enum MenuAction {
     ToggleAutoAttach,
     ToggleSounds,
     ToggleKeepAudio,
+    ToggleWisprFlow,
+    AgentDelivery(AgentDelivery),
     Model(String),
     InputDevice(String),
     MicrophoneSettings,
@@ -42,6 +45,7 @@ pub struct Tray {
     record_new: MenuItem,
     attach: MenuItem,
     cancel: MenuItem,
+    send: MenuItem,
     directory_menu: Submenu,
     /// Recent directories at the top of the Directory submenu, then a separator.
     directories: Vec<(PathBuf, CheckMenuItem)>,
@@ -55,6 +59,8 @@ pub struct Tray {
     auto_attach: CheckMenuItem,
     sounds: CheckMenuItem,
     keep_audio: CheckMenuItem,
+    wispr_flow: CheckMenuItem,
+    deliveries: Vec<(AgentDelivery, CheckMenuItem)>,
     models: Vec<(String, CheckMenuItem)>,
     devices: Vec<(String, CheckMenuItem)>,
     microphone_settings: MenuItem,
@@ -72,6 +78,9 @@ pub struct View<'a> {
     pub bound: Option<&'a Path>,
     pub note_info: String,
     pub has_note: bool,
+    /// "Send to Claude Code", or "Send to Agent" when no single agent is listening.
+    pub send_label: String,
+    pub send_enabled: bool,
 }
 
 impl Tray {
@@ -81,6 +90,7 @@ impl Tray {
         let record_new = MenuItem::new("Start in New Note", false, accelerator(&config.shortcuts.record_new_note));
         let attach = MenuItem::new("Attach Clipboard Image", false, accelerator(&config.shortcuts.attach_image));
         let cancel = MenuItem::new(cancel_label(config), false, None);
+        let send = MenuItem::new("Send to Agent", false, accelerator(&config.shortcuts.send_to_agent));
         let choose_directory = MenuItem::new("Choose Directory…", true, None);
         let directory_menu = Submenu::new("Directory", true);
         directory_menu.append(&choose_directory)?;
@@ -94,6 +104,18 @@ impl Tray {
             CheckMenuItem::new("Auto-attach Images Copied While Recording", true, config.auto_attach_images, None);
         let sounds = CheckMenuItem::new("Sounds", true, config.sounds, None);
         let keep_audio = CheckMenuItem::new("Keep Audio Clips", true, config.keep_audio, None);
+        let wispr_flow = CheckMenuItem::new("Add Wispr Flow Dictations", true, config.wispr_flow, None);
+        let deliveries: Vec<(AgentDelivery, CheckMenuItem)> = [
+            (AgentDelivery::Each, "Each Aside as It's Transcribed"),
+            (AgentDelivery::Batch, "In Batches, with Send to Agent"),
+        ]
+        .into_iter()
+        .map(|(mode, label)| (mode, CheckMenuItem::new(label, true, mode == config.agent_delivery, None)))
+        .collect();
+        let delivery_menu = Submenu::new("Agents Get Asides", true);
+        for (_, item) in &deliveries {
+            delivery_menu.append(item)?;
+        }
         let models: Vec<(String, CheckMenuItem)> = MODELS
             .iter()
             .map(|m| (m.id.to_string(), CheckMenuItem::new(m.label, true, m.id == config.model, None)))
@@ -119,9 +141,11 @@ impl Tray {
             &auto_attach,
             &sounds,
             &keep_audio,
+            &wispr_flow,
             &PredefinedMenuItem::separator(),
             &model_menu,
             &device_menu,
+            &delivery_menu,
             &PredefinedMenuItem::separator(),
             &microphone_settings,
             &edit_settings,
@@ -135,6 +159,7 @@ impl Tray {
             &record_new,
             &attach,
             &cancel,
+            &send,
             &PredefinedMenuItem::separator(),
             &directory_menu,
             &note_info,
@@ -164,6 +189,7 @@ impl Tray {
             record_new,
             attach,
             cancel,
+            send,
             directory_menu,
             directories: Vec::new(),
             directories_separator: None,
@@ -176,6 +202,8 @@ impl Tray {
             auto_attach,
             sounds,
             keep_audio,
+            wispr_flow,
+            deliveries,
             models,
             devices: devices_items,
             microphone_settings,
@@ -190,6 +218,7 @@ impl Tray {
             (&self.record_new, MenuAction::RecordNewNote),
             (&self.attach, MenuAction::AttachImage),
             (&self.cancel, MenuAction::Cancel),
+            (&self.send, MenuAction::SendToAgent),
             (&self.choose_directory, MenuAction::ChooseDirectory),
             (&self.open, MenuAction::OpenNote),
             (&self.reveal, MenuAction::RevealNote),
@@ -206,9 +235,13 @@ impl Tray {
             (&self.auto_attach, MenuAction::ToggleAutoAttach),
             (&self.sounds, MenuAction::ToggleSounds),
             (&self.keep_audio, MenuAction::ToggleKeepAudio),
+            (&self.wispr_flow, MenuAction::ToggleWisprFlow),
         ];
         if let Some((_, action)) = checks.into_iter().find(|(item, _)| item.id() == id) {
             return Some(action);
+        }
+        if let Some((mode, _)) = self.deliveries.iter().find(|(_, item)| item.id() == id) {
+            return Some(MenuAction::AgentDelivery(*mode));
         }
         if let Some((dir, _)) = self.directories.iter().find(|(_, item)| item.id() == id) {
             return Some(MenuAction::SwitchDirectory(dir.clone()));
@@ -236,6 +269,8 @@ impl Tray {
         self.record_new.set_enabled(view.bound.is_some() && !view.recording);
         self.attach.set_enabled(view.bound.is_some());
         self.cancel.set_enabled(view.recording);
+        self.send.set_text(menu_text(&view.send_label));
+        self.send.set_enabled(view.send_enabled);
         let directory = view.bound.and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
         self.directory_menu.set_text(menu_text(&format!("Directory: {}", directory.as_deref().unwrap_or("none"))));
         for (dir, item) in &self.directories {
@@ -253,6 +288,10 @@ impl Tray {
         self.auto_attach.set_checked(config.auto_attach_images);
         self.sounds.set_checked(config.sounds);
         self.keep_audio.set_checked(config.keep_audio);
+        self.wispr_flow.set_checked(config.wispr_flow);
+        for (mode, item) in &self.deliveries {
+            item.set_checked(*mode == config.agent_delivery);
+        }
         for (id, item) in &self.models {
             item.set_checked(*id == config.model);
         }
@@ -262,6 +301,7 @@ impl Tray {
         let _ = self.record.set_accelerator(accelerator(&config.shortcuts.record));
         let _ = self.record_new.set_accelerator(accelerator(&config.shortcuts.record_new_note));
         let _ = self.attach.set_accelerator(accelerator(&config.shortcuts.attach_image));
+        let _ = self.send.set_accelerator(accelerator(&config.shortcuts.send_to_agent));
         self.cancel.set_text(cancel_label(config));
     }
 
@@ -298,6 +338,7 @@ impl Tray {
             MenuAction::ToggleAutoAttach => self.auto_attach.is_checked(),
             MenuAction::ToggleSounds => self.sounds.is_checked(),
             MenuAction::ToggleKeepAudio => self.keep_audio.is_checked(),
+            MenuAction::ToggleWisprFlow => self.wispr_flow.is_checked(),
             _ => false,
         }
     }

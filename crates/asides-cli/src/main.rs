@@ -1,9 +1,11 @@
+mod mcp;
+
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use asides_core::config::{Config, pretty_shortcut};
+use asides_core::config::{AgentDelivery, Config, pretty_shortcut};
 use asides_core::link::Link;
 use asides_core::notes::{self, Note};
 use asides_core::paths::{self, BUNDLE_ID, tilde};
@@ -43,6 +45,17 @@ enum Command {
     },
     /// Quit the menu-bar app.
     Quit,
+    /// Send to Agent: hand the asides recorded so far to agents listening in batch mode.
+    Send,
+    /// Run the MCP server that hands your asides to coding agents (Claude Code, Codex, OpenCode).
+    ///
+    /// Agents start it themselves; register it once, e.g. `claude mcp add asides -- asides mcp`.
+    Mcp {
+        /// How long a wait for asides lasts before the agent is told to call again, in seconds
+        /// (default: 25 min for Claude Code, 50 s for other agents).
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u64>,
+    },
     /// Development: process a WAV file as if it had just been recorded.
     #[command(hide = true)]
     Simulate {
@@ -95,6 +108,8 @@ fn run(cli: Cli) -> Result<()> {
             }
             send(&Link::Quit)
         }
+        Some(Command::Send) => send_batch(),
+        Some(Command::Mcp { timeout }) => mcp::run(dir()?, timeout),
         Some(Command::Simulate { wav, new, image, at }) => {
             let request = request_id();
             let wav = wav.canonicalize().context("WAV file not found")?;
@@ -143,6 +158,23 @@ fn bind(dir: &Path, new_note: bool, title: Option<String>) -> Result<()> {
         && let Some(detail) = state.detail
     {
         println!("  ! {detail}");
+    }
+    Ok(())
+}
+
+fn send_batch() -> Result<()> {
+    if running_state().is_none() {
+        bail!("Asides is not running. Run `asides` in a repo to start it.");
+    }
+    let request = request_id();
+    send(&Link::Send { request: Some(request.clone()) })?;
+    let state = wait_for_ack(&request)?;
+    if Config::load(&paths::config_path()).unwrap_or_default().agent_delivery == AgentDelivery::Each {
+        println!("Sent. (Agents already get each aside as it's transcribed: agent_delivery is \"each\".)");
+    } else if state.status == "recording" || state.status == "transcribing" {
+        println!("Sending once the last recording is transcribed.");
+    } else {
+        println!("Sent to the agents listening in {}.", state.bound_dir.as_deref().map(tilde).unwrap_or_default());
     }
     Ok(())
 }
@@ -229,6 +261,10 @@ fn check(cmd: &mut Process, what: &str) -> Result<()> {
         bail!("failed to {what}");
     }
     Ok(())
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 fn request_id() -> String {

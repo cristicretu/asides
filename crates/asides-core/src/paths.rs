@@ -24,6 +24,11 @@ pub fn models_dir() -> PathBuf {
     support_dir().join("models")
 }
 
+/// One record per agent session listening through `asides mcp` (see `agents::Listener`).
+pub fn listeners_dir() -> PathBuf {
+    support_dir().join("listeners")
+}
+
 /// `/Users/me/code/shop` → `~/code/shop`.
 pub fn tilde(path: &Path) -> String {
     match std::env::home_dir().and_then(|home| path.strip_prefix(&home).ok().map(Path::to_path_buf)) {

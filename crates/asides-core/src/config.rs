@@ -10,6 +10,9 @@ const HEADER: &str = r#"# Asides settings. Changes are picked up automatically.
 # Shortcut syntax: modifiers (ctrl, alt/option, shift, cmd) + a key (Space, Escape, KeyN, Digit1, F5, …),
 # joined with '+'. Avoid option-only combinations: macOS refuses them.
 # languages: Whisper codes to choose between, e.g. ["en", "ro"]; [] detects any language.
+# agent_delivery: "each" hands every recording to agents listening through `asides mcp` as soon as
+# it's transcribed; "batch" holds them until you choose Send to Agent.
+# wispr_flow_apps: app names or bundle IDs whose Wispr Flow dictations are added; [] means any app.
 
 "#;
 
@@ -30,7 +33,24 @@ pub struct Config {
     /// Whisper language codes a recording can be in (e.g. `["en", "ro"]`): each recording is
     /// transcribed in the most likely of these. Empty means any language Whisper knows.
     pub languages: Vec<String>,
+    /// When coding agents listening through `asides mcp` receive new entries.
+    pub agent_delivery: AgentDelivery,
+    /// Dictations made with Wispr Flow are added to the note, like recordings.
+    pub wispr_flow: bool,
+    /// Only Wispr Flow dictations made in these apps (names or bundle IDs, matched ignoring case);
+    /// empty means any app.
+    pub wispr_flow_apps: Vec<String>,
     pub shortcuts: Shortcuts,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentDelivery {
+    /// Each entry as soon as it's written.
+    #[default]
+    Each,
+    /// Entries wait until the user chooses Send to Agent.
+    Batch,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,6 +60,8 @@ pub struct Shortcuts {
     pub record_new_note: String,
     pub attach_image: String,
     pub cancel: String,
+    /// Only registered while `agent_delivery` is `batch`.
+    pub send_to_agent: String,
 }
 
 impl Default for Config {
@@ -52,6 +74,9 @@ impl Default for Config {
             model: crate::models::MODELS[0].id.into(),
             input_device: String::new(),
             languages: Vec::new(),
+            agent_delivery: AgentDelivery::default(),
+            wispr_flow: false,
+            wispr_flow_apps: Vec::new(),
             shortcuts: Shortcuts::default(),
         }
     }
@@ -64,6 +89,7 @@ impl Default for Shortcuts {
             record_new_note: "ctrl+alt+KeyN".into(),
             attach_image: "ctrl+alt+KeyV".into(),
             cancel: "Escape".into(),
+            send_to_agent: "ctrl+alt+Enter".into(),
         }
     }
 }
@@ -109,6 +135,7 @@ pub fn pretty_shortcut(shortcut: &str) -> String {
             key = match lower.as_str() {
                 "escape" | "esc" => "Esc".into(),
                 "space" => "Space".into(),
+                "enter" | "return" => "↩".into(),
                 _ => last.strip_prefix("Key").or_else(|| last.strip_prefix("Digit")).unwrap_or(last).to_uppercase(),
             };
         }
@@ -127,6 +154,7 @@ mod tests {
         assert_eq!(pretty_shortcut("Escape"), "Esc");
         assert_eq!(pretty_shortcut("ctrl+alt+Digit1"), "⌃⌥1");
         assert_eq!(pretty_shortcut("option+F5"), "⌥F5");
+        assert_eq!(pretty_shortcut("ctrl+alt+Enter"), "⌃⌥↩");
     }
 
     #[test]
@@ -147,5 +175,11 @@ mod tests {
         assert!(!partial.sounds && partial.hold_to_talk);
         assert_eq!(partial.shortcuts.cancel, "F12");
         assert_eq!(partial.shortcuts.record, "ctrl+alt+Space");
+        assert_eq!((partial.agent_delivery, partial.wispr_flow), (AgentDelivery::Each, false));
+
+        fs::write(&path, "agent_delivery = \"batch\"\nwispr_flow = true\nwispr_flow_apps = [\"Safari\"]\n").unwrap();
+        let agents = Config::load(&path).unwrap();
+        assert_eq!(agents.agent_delivery, AgentDelivery::Batch);
+        assert_eq!((agents.wispr_flow, agents.wispr_flow_apps), (true, vec!["Safari".to_string()]));
     }
 }

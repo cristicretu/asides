@@ -8,15 +8,22 @@ How asides fits together, for anyone about to change it. User-facing behavior is
 ```
  terminal                        Asides.app (menu bar, one process)
 ┌───────────┐  open -g -b …   ┌─────────────────────────────────────────────────────────────┐
-│ asides │ ──────────────▶ │ main thread: tao event loop                                 │
-│   (CLI)   │ asides://…   │   App: bindings, recording, status icon and menu, shortcuts │
-│           │                 │        │ Job                          ▲ Outcome            │
-│           │ ◀────────────── │        ▼                              │                    │
+│  asides   │ ──────────────▶ │ main thread: tao event loop                                 │
+│   (CLI)   │   asides://…    │   App: bindings, recording, status icon and menu, shortcuts │
+│           │                 │        │ Job                          ▲ Outcome             │
+│           │ ◀────────────── │        ▼                              │                     │
 └───────────┘   state.json    │ worker thread: resample → Whisper → write note files        │
       │                       └─────────────────────────────────────────────────────────────┘
       │ path / open / export                │ appends
       ▼                                      ▼
             <repo>/.asides/<YYYY-MM-DD-HHMM Title>/notes.md, images/, audio/
+      ▲
+      │ reads entries; state.json (batch sends), config.toml (delivery mode)
+┌─────────────┐  stdio JSON-RPC   ┌────────────────────────────┐
+│ asides mcp  │ ◀───────────────▶ │ coding agent (Claude Code, │
+│   (CLI)     │                   │ Codex, OpenCode, …)        │
+└─────────────┘                   └────────────────────────────┘
+   writes listeners/<pid>.json, which the app shows in its menu
 ```
 
 - **The CLI is a remote control.** It works out which directory to bind, then hands the app a link
@@ -26,31 +33,39 @@ How asides fits together, for anyone about to change it. User-facing behavior is
 - **The app is one long-lived process.** It is menu-bar only (`LSUIElement`, accessory activation
   policy). The main thread owns the UI and recording; a single worker thread does everything slow
   or file-related.
+- **Agents read, the app writes.** `asides mcp` is started by a coding agent, one per agent
+  session. It only reads notes and the app's published state, and hands new entries to the agent.
+  The app never talks to it directly: it publishes batch sends in `state.json`, and shows the
+  listener records the server writes.
 
 ## Code map
 
 ```
 crates/
   asides-core/     platform-independent, no macOS or UI dependencies, unit-tested
-    notes.rs          note folders, latest-note discovery, titles, append, entry numbering, zip export
+    notes.rs          note folders, latest-note discovery, titles, append, entries, zip export
     frontmatter.rs    YAML metadata (written once per note)
     markdown.rs       entry composition: segments → paragraphs, image placement by timestamp
     project.rs        bind rules (git root or the current directory), git facts, .git/info/exclude
     link.rs           asides:// link format (the CLI → app protocol)
-    state.rs          state.json (the app → CLI protocol), recent directories
+    state.rs          state.json (the app → CLI protocol), recent directories, batch sends
+    agents.rs         what a listening agent has seen and what's new (Cursor, collect), listener records
+    wispr.rs          Wispr Flow's dictation history (flow.sqlite through the system's sqlite3)
     config.rs         config.toml schema and defaults, shortcut pretty-printing
     models.rs         Whisper model catalog (file names, sizes, SHA-256)
     resample.rs       windowed-sinc resampler to 16 kHz
     paths.rs          bundle ID, URL scheme, Application Support paths, tilde()
   asides-cli/      shipped inside the bundle as Asides.app/Contents/Helpers/asides
     main.rs           clap subcommands, `open -g -b <bundle id> <link>`, waits for the app to acknowledge
+    mcp.rs            `asides mcp`: the MCP server (tools wait_for_asides and get_asides, prompts)
   asides-app/      binary `asides-app`, renamed Asides inside the bundle
     main.rs           App: event loop, UserEvent dispatch, recording state machine, bind(), refresh(), publish()
     tray.rs           status item and menu (MenuAction, View, Directory submenu)
     icons.rs          SF Symbols rendered to RGBA for tray-icon
     hotkeys.rs        global shortcuts (Carbon hot keys); Esc registered only while recording
     audio.rs          cpal microphone capture → mono f32 at the device rate
-    worker.rs         Job queue: transcription, note creation, images, audio, append
+    worker.rs         Job queue: transcription, note creation, images, audio, Wispr Flow dictations, append
+    watch.rs          polling threads: Wispr Flow's history, the agents listening
     stt.rs            ModelManager (download, verify, wait), Transcriber (whisper-rs), language choice
     clipboard.rs      NSPasteboard: images (PNG, TIFF, file URLs), change counter, copy text
     environment.rs    macOS version, frontmost or last-active browser, display (note metadata)
@@ -58,8 +73,8 @@ crates/
 packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL scheme
 packaging/Asides.entitlements   microphone entitlement (required by the hardened runtime)
 packaging/download/   the Cloudflare Worker that serves the website's disk image (static files only)
-scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh, release.sh,
-                      make-dmg.sh, publish-dmg.sh
+scripts/              e2e.sh (+ e2e-mcp.py, a scripted agent), make-fixtures.sh, signing-identity.sh,
+                      make-signing-cert.sh, release.sh, make-dmg.sh, publish-dmg.sh, make-og.py
 docs/                 the website (GitHub Pages): index.html, wallpaper.webp, favicon.svg, og.png
 Casks/asides.rb       the Homebrew cask; the repository doubles as a tap
 ```
@@ -73,6 +88,8 @@ Casks/asides.rb       the Homebrew cask; the repository doubles as a tap
 | Worker (`worker::spawn`) | the loaded `Transcriber`, **all note file writes** | `UserEvent::Work(Outcome)` |
 | Model download (one per model) | the `.part` file | `UserEvent::Model(id, ModelState)`, plus a `Condvar` for the worker |
 | Config watcher | polls `config.toml`'s modification time every 2 s | `UserEvent::ConfigFileChanged` |
+| Wispr Flow watcher (while on) | a `wispr::History`; queries only after `flow.sqlite` changes | `UserEvent::Wispr` |
+| Listeners watcher | reads `listeners/` every 2 s, removes records of dead processes | `UserEvent::Listeners` |
 | global-hotkey, muda | | `UserEvent::HotKey`, `UserEvent::Menu` |
 
 Background threads never touch AppKit objects. They send `UserEvent`s through the
@@ -113,6 +130,34 @@ Choosing a directory from the menu goes through `bind_from_menu`, which applies 
    - saves images and optional audio, composes the entry and appends it
 5. **Outcome:** the main thread flashes `✓ #N`, re-reads the latest note and publishes the state.
 
+### A Wispr Flow dictation
+
+With `wispr_flow` on, the watcher reports each dictation Wispr Flow finished since the watcher
+started (`formatted` or `raw_transcript` rows of its `History` table, not archived). The main thread
+checks `wispr_flow_apps` and the binding, consumes a pending "new note" request like a recording
+would, and submits a `Job::Dictation`. The worker appends `## N · HH:MM · Wispr Flow` and the text,
+as Wispr Flow typed it.
+
+### Agents (`asides mcp`)
+
+1. The agent starts `asides mcp` in its working directory, which resolves to the repo like
+   `asides` does. The server starts its `Cursor` at the end of the latest note: only entries written
+   from then on are new.
+2. The agent calls `wait_for_asides`. If the app isn't running or is bound elsewhere, the call
+   returns at once and says so; the agent then calls `bind_asides`, which binds the app like
+   `asides` does. Otherwise the server writes `listeners/<pid>.json` (`waiting: true`).
+3. The server polls every 400 ms, reading `config.toml` for `agent_delivery`:
+   - `each`: any entry after the cursor, plus text added to the last delivered entry (an image
+     attached after it).
+   - `batch`: only once `state.json`'s `agent_send` is newer than the last one acted on and names
+     this directory; then the entries up to its note and entry number. The app publishes
+     `agent_send` after Send to Agent, once queued recordings are transcribed.
+4. It returns the entries (text with absolute links, then the screenshots as images) and moves the
+   cursor past them. With nothing new by the deadline (50 s, or 25 min for Claude Code, whose tool
+   calls may last longer), it says so and the agent calls again. Progress notifications every 20 s
+   keep the call alive in clients that time out idle calls.
+5. When the agent hangs up (stdin closes), the listener record is removed.
+
 ## Invariants
 
 Break these only on purpose, and update this document when you do.
@@ -125,12 +170,14 @@ Break these only on purpose, and update this document when you do.
    entries ordered and numbered correctly even when recordings queue up.
 4. **Notes are append-only.** Entries are added with a single append; existing content is never
    rewritten. Editors and agents can keep the file open, and users can edit notes freely.
-5. **Metadata is written once,** when a note is created. Entries carry only `## N · HH:MM`.
+5. **Metadata is written once,** when a note is created. Entries carry only `## N · HH:MM`, plus
+   an audio link or a source (`· Wispr Flow`) when there is one.
 6. **Transcripts are verbatim.** No prompt, no vocabulary, no post-processing; in testing, a
-   prompt silently dropped words. Changes here need a design discussion first.
+   prompt silently dropped words. Changes here need a design discussion first. Wispr Flow entries
+   are Wispr Flow's text as it typed it, marked with their source, and not changed either.
 7. **The CLI ↔ app protocol is `link.rs` plus `state.rs`.** Change both sides together. New
    `state.json` and `config.toml` fields need serde defaults, so files written by older versions
-   still load.
+   still load. `asides mcp` uses the same files, plus the listener records in `agents.rs`.
 8. **The app is launched by Launch Services, never as a child of a terminal.** Otherwise macOS
    attributes the microphone permission to the terminal, and the app dies with the terminal.
 9. **Binary names must differ by more than letter case.** On case-insensitive APFS,
@@ -141,6 +188,10 @@ Break these only on purpose, and update this document when you do.
 11. **No new permissions without discussion.** Today Asides needs only the microphone (plus the
     optional clipboard prompt). Features that would require Accessibility, Input Monitoring or
     Screen Recording change what users must trust.
+12. **`asides mcp` writes nothing to stdout but JSON-RPC.** Anything else breaks the agent's
+    connection. It never writes notes. Its only effect on the app is `bind_asides`; the other tools
+    stay read-only (and marked so), because agents like Codex ask before every call to a tool that
+    isn't.
 
 ## Persistent state
 
@@ -150,6 +201,8 @@ Break these only on purpose, and update this document when you do.
 | `~/Library/Application Support/Asides/config.toml` | app (menu), user | reloaded on change; unknown fields ignored, missing ones defaulted |
 | `~/Library/Application Support/Asides/state.json` | app | binding, pending new note, status, recent directories, last acknowledged request |
 | `~/Library/Application Support/Asides/models/` | download thread | `.part` while downloading, renamed after the SHA-256 check |
+| `~/Library/Application Support/Asides/listeners/<pid>.json` | `asides mcp` | one per agent session listening; stale ones removed by the app |
+| `~/Library/Application Support/Wispr Flow/flow.sqlite` | Wispr Flow | read-only, only with `wispr_flow` on. Dev-hooks builds read `Asides/test-wispr-flow.sqlite` instead when it exists (end-to-end test) |
 
 ## Design decisions
 
@@ -170,3 +223,11 @@ Break these only on purpose, and update this document when you do.
   22 pt canvas at 2×.
 - **Shortcuts through Carbon hot keys** (global-hotkey). They need no Accessibility permission,
   and they report key-up, which makes hold-to-talk possible.
+- **Agents wait in a tool call.** MCP has no portable way for a server to start a turn in the
+  agent, so `wait_for_asides` blocks until there's something to deliver, and its description and
+  result tell the agent to call it again. It works the same in every client. Claude Code's
+  channels can push into a session, but they need a development flag in every session.
+- **Wispr Flow through its history, read with `/usr/bin/sqlite3`.** Wispr Flow has no public API
+  for its dictations, and its local database is the record of them. The system's `sqlite3`
+  (`-readonly -json`) avoids compiling SQLite into the app. Its schema changes between versions, so
+  columns are discovered at run time and only `timestamp` and a text column are required.

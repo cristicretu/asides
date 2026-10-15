@@ -34,9 +34,23 @@ make fixtures    # once: test audio generated with the macOS voices
 |---|---|
 | `asides-core` | `cargo test -p asides-core` |
 | the CLI | `cargo run -p asides-cli -- status` (and the other subcommands) |
+| `asides mcp` | pipe JSON-RPC lines into `cargo run -p asides-cli -- mcp` (example below), then try it in an agent |
 | the app | `make install`, then `asides` in a scratch repo and try it for real |
 
 `make install` quits the running Asides and replaces it.
+
+The MCP server speaks JSON-RPC, one message per line, on stdin and stdout:
+
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"me","version":"1"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_asides","arguments":{}}}' \
+  | cargo run -q -p asides-cli -- mcp
+```
+
+To try it in an agent without changing its settings, start Claude Code with
+`--mcp-config '{"mcpServers":{"asides":{"command":"asides","args":["mcp"]}}}'`, or Codex with
+`-c 'mcp_servers.asides.command="asides"' -c 'mcp_servers.asides.args=["mcp"]'`. With a dev-hooks
+build installed, `asides simulate <wav>` stands in for speaking.
 
 The app's output (`eprintln!`) is discarded when it's launched normally. To see it, quit the app
 (`asides quit`) and run the binary from a terminal:
@@ -62,7 +76,7 @@ deleted.
 |---|---|---|
 | Unit | `make test` | notes, metadata, Markdown, git info, links, state, config, resampling, language choice, icon rendering |
 | Speech | `make test-speech` | transcription of the fixtures (needs the model) and a real model download with checksum check (190 MB) |
-| End-to-end | `make e2e` | installs a build with the `dev-hooks` feature, then drives it through the `asides` command in a throwaway git repo, feeding WAV files instead of the microphone (`asides simulate`) |
+| End-to-end | `make e2e` | installs a build with the `dev-hooks` feature, then drives it through the `asides` command in a throwaway git repo, feeding WAV files instead of the microphone (`asides simulate`), a database of its own instead of Wispr Flow's history, and `scripts/e2e-mcp.py` as a coding agent (each and batch delivery, Send to Agent, cancelling). It restores your `config.toml` afterwards |
 | Manual | checklist below | everything a script can't do: the microphone, shortcuts, menus and permissions |
 
 To look at the menu-bar icons without installing, render them to files:
@@ -99,6 +113,12 @@ in your pull request what you tried.
   - the bound directory deleted while the app runs
 - [ ] **CLI:** closing the terminal after `asides` leaves the app running; `asides quit`
   finishes queued transcriptions first.
+- [ ] **Agents:** with an agent listening, the status line names it; a recording reaches it a few
+  seconds after you stop. In batch mode, `⌃⌥↩` and Send to Agent in the menu deliver everything
+  recorded so far, including a recording still in progress; in each mode the item is disabled and
+  `⌃⌥↩` stays free for other apps.
+- [ ] **Wispr Flow:** with Add Wispr Flow Dictations on, a dictation lands in the note marked
+  `· Wispr Flow`; with it off, nothing does.
 
 ## Common changes
 
@@ -118,6 +138,11 @@ in your pull request what you tried.
   - If it needs the app, add a `Link` variant in `link.rs` (with a round-trip test) and handle it
     in `App::handle_link`.
   - Replies go through `state.json`: add a field to `AppState` with a serde default.
+- **An MCP tool or prompt:** add it to `tools()` or `prompts()` in `asides-cli/src/mcp.rs` and handle
+  it in `call_tool` or `prompt`. Keep tools read-only (and annotated `readOnlyHint`) unless they
+  must change something, like `bind_asides`, and stdout for JSON-RPC only. Cover it in
+  `scripts/e2e-mcp.py`, and try it in Claude Code and one other agent: clients differ in timeouts
+  and in what content they accept.
 - **A model:** add it to `MODELS` in `models.rs` with the exact size and SHA-256 from the Hugging
   Face file listing. All models must be multilingual.
 - **The note format:** change `markdown.rs` or `frontmatter.rs` along with their tests, then the
@@ -177,8 +202,10 @@ certificate in your keychain.
 static `index.html` with inline CSS and JavaScript and no build step: open it in a browser to
 preview it (`python3 -m http.server -d docs` serves it at http://localhost:8000). The demo is a
 Mac desktop drawn on a 1024 × 640 grid that scales with the page; on phones it shows a zoomed,
-square part of it that follows the action. `wallpaper.webp` is its background. `og.png` is the 1200×630 image shown when the link is shared. Pushes to `main` that
-only change `docs/` skip CI; pull requests always run it.
+square part of it that follows the action. What the tester says shows as subtitles inside the picture. `wallpaper.webp` is its background.
+`og.png` is the 1200×630 image shown when the link is shared: the demo frozen mid-recording. After
+changing the demo, regenerate it with `python3 scripts/make-og.py` (it needs Firefox). Pushes to
+`main` that only change `docs/` skip CI; pull requests always run it.
 
 The page repeats the shortcuts, requirements and install steps from the README, so update both
 together.

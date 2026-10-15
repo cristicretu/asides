@@ -12,6 +12,7 @@ pub enum Action {
     RecordNewNote,
     AttachImage,
     Cancel,
+    SendToAgent,
 }
 
 pub struct Hotkeys {
@@ -24,7 +25,7 @@ pub struct Hotkeys {
 }
 
 impl Hotkeys {
-    pub fn new(shortcuts: &Shortcuts) -> anyhow::Result<Hotkeys> {
+    pub fn new(shortcuts: &Shortcuts, send: bool) -> anyhow::Result<Hotkeys> {
         let mut hotkeys = Hotkeys {
             manager: GlobalHotKeyManager::new()?,
             bindings: Vec::new(),
@@ -32,23 +33,29 @@ impl Hotkeys {
             cancel_active: false,
             errors: Vec::new(),
         };
-        hotkeys.apply(shortcuts);
+        hotkeys.apply(shortcuts, send);
         Ok(hotkeys)
     }
 
     /// (Re)registers all shortcuts. Cancel is only registered while recording, so Esc keeps
-    /// working normally in other apps the rest of the time.
-    pub fn apply(&mut self, shortcuts: &Shortcuts) {
+    /// working normally in other apps the rest of the time, and Send to Agent only with `send`
+    /// (batch delivery), so the shortcut stays free for other apps otherwise.
+    pub fn apply(&mut self, shortcuts: &Shortcuts, send: bool) {
         for (hotkey, _) in self.bindings.drain(..) {
             let _ = self.manager.unregister(hotkey);
         }
         self.set_cancel_active(false);
         self.errors.clear();
+        let send = send.then_some((&shortcuts.send_to_agent, Action::SendToAgent));
         for (text, action) in [
             (&shortcuts.record, Action::Record),
             (&shortcuts.record_new_note, Action::RecordNewNote),
             (&shortcuts.attach_image, Action::AttachImage),
-        ] {
+        ]
+        .into_iter()
+        .chain(send)
+        .filter(|(text, _)| !text.trim().is_empty())
+        {
             match HotKey::from_str(text) {
                 Ok(hotkey) => match self.manager.register(hotkey) {
                     Ok(()) => self.bindings.push((hotkey, action)),

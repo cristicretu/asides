@@ -70,6 +70,11 @@ pub fn compose_entry(
     blocks.join("\n\n")
 }
 
+/// `## 6 · 14:40 · Wispr Flow` followed by text another app transcribed, exactly as it came.
+pub fn compose_dictation_entry(number: u32, time_label: &str, source: &str, text: &str) -> String {
+    format!("## {number} · {time_label} · {source}\n\n{}", text.trim())
+}
+
 /// The plain transcript of a recording, used for titles and for "nothing heard" checks.
 pub fn plain_text(segments: &[Segment]) -> String {
     segments.iter().map(|s| s.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ")
@@ -114,6 +119,14 @@ mod tests {
         assert_eq!(
             compose_entry(2, "10:00", None, &[seg(0.0, 1.0, "  ")], &[img(1.0, 1)]),
             "## 2 · 10:00\n\n![img1](images/01.png)"
+        );
+    }
+
+    #[test]
+    fn dictation_entry_names_its_source() {
+        assert_eq!(
+            compose_dictation_entry(6, "14:40", "Wispr Flow", "\nThe card needs padding.\n\nAnd a border.\n"),
+            "## 6 · 14:40 · Wispr Flow\n\nThe card needs padding.\n\nAnd a border."
         );
     }
 

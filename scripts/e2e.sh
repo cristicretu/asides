@@ -1,13 +1,27 @@
 #!/bin/bash
 # End-to-end test: the installed Asides.app (built with dev hooks) driven through the `asides`
-# CLI in a throwaway git repo. WAV fixtures stand in for the microphone (`asides simulate`).
+# CLI in a throwaway git repo. WAV fixtures stand in for the microphone (`asides simulate`), a
+# database of our own for Wispr Flow's history, and scripts/e2e-mcp.py for a coding agent.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FIX="$ROOT/tests/fixtures"
 CLI="${ASIDES_CLI:-$HOME/.local/bin/asides}"
+SUPPORT="$HOME/Library/Application Support/Asides"
+CONFIG="$SUPPORT/config.toml"
+# Dev-hooks builds read this instead of Wispr Flow's own history.
+WISPR_DB="$SUPPORT/test-wispr-flow.sqlite"
 WORK=$(mktemp -d)
-trap '"$CLI" quit >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
+mkdir -p "$SUPPORT"
+# The agent test switches to batch delivery; the user's settings are put back afterwards.
+cp "$CONFIG" "$WORK/config.toml.saved" 2>/dev/null || true
+cleanup() {
+    "$CLI" quit >/dev/null 2>&1 || true
+    if [ -f "$WORK/config.toml.saved" ]; then cp "$WORK/config.toml.saved" "$CONFIG"; else rm -f "$CONFIG"; fi
+    rm -f "$WISPR_DB" "$WISPR_DB-wal" "$WISPR_DB-shm"
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 pass() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 fail() { printf '  \033[31m✗\033[0m %s\n' "$1"; exit 1; }
@@ -24,6 +38,11 @@ wait_for() { # file, text
     echo "--- $1"; cat "$1" 2>/dev/null || true
     fail "timed out waiting for \"$2\""
 }
+
+# Wispr Flow's History table, as far as Asides reads it.
+rm -f "$WISPR_DB" "$WISPR_DB-wal" "$WISPR_DB-shm"
+/usr/bin/sqlite3 "$WISPR_DB" "PRAGMA journal_mode=WAL; CREATE TABLE History (transcriptEntityId TEXT PRIMARY KEY,
+  timestamp DATETIME, app TEXT, status TEXT, formattedText TEXT, asrText TEXT, isArchived TINYINT(1) DEFAULT 0);" >/dev/null
 
 REPO="$WORK/shop"
 mkdir -p "$REPO/src"
@@ -76,6 +95,22 @@ wait_for "$NOTE2" "## 1 ·"
 check "title from the first sentence" contains "$NOTE2" "title: Butonul de salvare nu face nimic după ce schimb parola"
 check "first note untouched" test "$(grep -c '^## ' "$NOTE")" = 2
 
+echo "Wispr Flow dictations"
+dictate() { # id, app, text
+    /usr/bin/sqlite3 "$WISPR_DB" "INSERT INTO History VALUES ('$1', '$(date -u '+%Y-%m-%d %H:%M:%S.000 +00:00')',
+      '$2', 'formatted', '$3', '', 0);"
+}
+dictate e2e-1 com.apple.Safari "The coupon field accepts expired codes."
+wait_for "$NOTE2" "The coupon field accepts expired codes."
+check "a dictation becomes an entry, marked as Wispr Flow" grep -q '^## 2 · [0-9:]* · Wispr Flow$' "$NOTE2"
+printf 'wispr_flow_apps = ["Safari"]\n' | cat - "$CONFIG" > "$WORK/config.toml" && cp "$WORK/config.toml" "$CONFIG"
+sleep 3
+dictate e2e-3 com.tinyspeck.slackmacgap "Not about the app either."
+dictate e2e-4 com.apple.Safari "The total is off by a cent."
+wait_for "$NOTE2" "The total is off by a cent."
+check "wispr_flow_apps leaves out other apps" test -z "$(grep -e "Not about the app" "$NOTE2")"
+cp "$WORK/config.toml.saved" "$CONFIG" 2>/dev/null || rm -f "$CONFIG"
+
 echo "Status, export, git hygiene"
 check "status shows the binding" grep -q "bound to .*/shop" <<<"$("$CLI" status)"
 "$CLI" export --out "$WORK/note.zip" >/dev/null
@@ -96,6 +131,9 @@ check "the new repo has no notes yet" grep -q "No notes in" <<<"$("$CLI" -C "$OT
 "$CLI" >/dev/null
 check "switching back reorders the list" test "$(recent | tr '\n' ' ')" = "shop admin "
 check "and appends to the same note again" grep -q 'appending to "Butonul' <<<"$("$CLI")"
+
+echo "Coding agents (asides mcp)"
+/usr/bin/python3 -I "$ROOT/scripts/e2e-mcp.py" "$CLI" "$REPO" "$FIX" "$CONFIG" "$SUPPORT/listeners" "$OTHER"
 
 echo "Quit"
 "$CLI" quit >/dev/null

@@ -12,6 +12,16 @@ const MAX_TITLE_CHARS: usize = 60;
 /// Length of the `YYYY-MM-DD-HHMM` folder-name prefix.
 const STAMP_LEN: usize = 15;
 
+/// One entry of a note: its `## N · HH:MM` heading and everything up to the next entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub number: u32,
+    /// The heading without its `## `, e.g. `5 · 14:38 · [audio](audio/05-143812.m4a)`.
+    pub heading: String,
+    /// The transcript, images and anything added by hand, without surrounding blank lines.
+    pub body: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Note {
     pub dir: PathBuf,
@@ -186,11 +196,42 @@ fn title_from_folder_name(name: &str) -> String {
 
 /// Numbers of entry headings (`## 3 · 14:38`) in a note.
 fn entry_numbers(content: &str) -> impl Iterator<Item = u32> + '_ {
-    content.lines().filter_map(|line| {
-        let rest = line.strip_prefix("## ")?;
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        digits.parse().ok()
-    })
+    content.lines().filter_map(entry_number)
+}
+
+fn entry_number(line: &str) -> Option<u32> {
+    let rest = line.strip_prefix("## ")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// The entries of a note, in file order. Text before the first entry (the front matter) is skipped.
+pub fn parse_entries(content: &str) -> Vec<Entry> {
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut body: Vec<&str> = Vec::new();
+    let finish = |entries: &mut Vec<Entry>, body: &mut Vec<&str>| {
+        if let Some(entry) = entries.last_mut() {
+            entry.body = body.join("\n").trim_matches('\n').trim_end().to_string();
+        }
+        body.clear();
+    };
+    for line in content.lines() {
+        if let Some(number) = entry_number(line) {
+            finish(&mut entries, &mut body);
+            entries.push(Entry { number, heading: line[3..].trim_end().to_string(), body: String::new() });
+        } else if !entries.is_empty() {
+            body.push(line);
+        }
+    }
+    finish(&mut entries, &mut body);
+    entries
+}
+
+/// The YAML front matter between the opening `---` and the closing one, without the markers.
+pub fn front_matter(content: &str) -> Option<&str> {
+    let rest = content.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    Some(&rest[..end])
 }
 
 #[cfg(test)]
@@ -293,6 +334,27 @@ mod tests {
         let mut content = String::new();
         archive.by_name(&format!("{root}/notes.md")).unwrap().read_to_string(&mut content).unwrap();
         assert_eq!(content, "---\n---\n");
+    }
+
+    #[test]
+    fn parses_entries_and_front_matter() {
+        let content = "---\ntitle: S\ndirectory: /x\n---\n\n## 1 · 14:32\n\nHello.\n\n## Summary by hand\n\n\
+                       ## 2 · 14:40 · [audio](audio/02.m4a)\n\nOne.\n\n![14:40:02](images/02.png)\n\nTwo.\n\n\n";
+        let entries = parse_entries(content);
+        assert_eq!(
+            entries,
+            [
+                Entry { number: 1, heading: "1 · 14:32".into(), body: "Hello.\n\n## Summary by hand".into() },
+                Entry {
+                    number: 2,
+                    heading: "2 · 14:40 · [audio](audio/02.m4a)".into(),
+                    body: "One.\n\n![14:40:02](images/02.png)\n\nTwo.".into()
+                },
+            ]
+        );
+        assert_eq!(front_matter(content), Some("title: S\ndirectory: /x"));
+        assert_eq!(front_matter("## 1 · 10:00\n"), None);
+        assert_eq!(parse_entries("---\n---\n"), []);
     }
 
     #[test]

@@ -10,6 +10,9 @@ asides is a macOS menu-bar app plus a CLI.
 - A global shortcut records speech.
 - whisper.cpp transcribes it locally, verbatim.
 - The transcript is appended to `<repo>/.asides/<YYYY-MM-DD-HHMM Title>/notes.md`.
+- Coding agents can listen through `asides mcp`, an MCP server in the CLI, and get each new
+  entry (or a batch, on Send to Agent) as a prompt.
+- With the Wispr Flow integration on, Wispr Flow dictations become entries too.
 
 It's a Rust workspace:
 - `crates/asides-core`: platform-independent logic.
@@ -27,6 +30,7 @@ It's a Rust workspace:
 | Speech tests | `make test-speech` (needs the model; also downloads 190 MB) |
 | Install | `make install` |
 | Test fixtures | `make fixtures` (needs the macOS voice "Ioana") |
+| Share image | `python3 scripts/make-og.py` (renders `docs/og.png` from the demo; needs Firefox) |
 | Notarized release | `make release` (only when the maintainer asks; see Rules) |
 
 Run format, lint and unit tests after every change. Run `make e2e` when CLI or app behavior
@@ -74,6 +78,9 @@ changes.
 - drive the installed app through the CLI with `asides simulate <wav> [--new] [--image FILE --at SECONDS]` (dev-hooks builds only; `make e2e` sets this up)
 - render the menu-bar icons to inspect them: `ASIDES_ICON_DUMP=<dir> cargo test -p asides-app icons` writes RGBA dumps you can convert to PNG
 - read `~/Library/Application Support/Asides/state.json`
+- drive `asides mcp` with JSON-RPC on stdin (see CONTRIBUTING.md), and run Claude Code, Codex or
+  OpenCode against it with a one-off MCP config, using `asides simulate` for speech
+- render the website with headless Firefox (`--screenshot`) to check layouts at phone width
 
 **You can't:**
 - press global shortcuts
@@ -123,6 +130,20 @@ The user may record a request and ask you to "implement the note". Find it with
   forever.
 - Apple's SpeechAnalyzer and FoundationModels are Swift-only, so Rust can't call them without a
   Swift shim.
+- Codex (and clients built on the MCP SDKs' defaults) abandon a tool call after 60 s, so
+  `wait_for_asides` returns within 50 s unless the client is Claude Code. Claude Code allows hours,
+  but cuts off a stdio call that sends nothing for 30 min; progress notifications keep it alive.
+- Codex asks for approval before each call to an MCP tool not marked `readOnlyHint` (and fails
+  it under `approval: never`), so a listening loop needs read-only tools. That's why binding is a
+  separate tool, `bind_asides`.
+- Claude Code probes `server/discover` (a newer MCP revision) before `initialize`. Answering
+  "method not found" makes it fall back to `initialize`.
+- Wispr Flow's `flow.sqlite` schema changes often between its versions. Discover columns, don't
+  assume them, and don't open it any way but read-only: Wispr Flow writes to it in WAL mode.
+- On the website, a `padding` shorthand on `.wrap` inside a media query reset the sections' top
+  padding on phones. Set only `padding-inline` there.
+- Headless Firefox takes `--screenshot` at load, mid-transition. Turn transitions off to capture a
+  frame (as `scripts/make-og.py` does).
 
 ## Commits
 

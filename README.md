@@ -1,7 +1,8 @@
 # asides
 
 **Talk through bugs while you test. Get them appended, transcribed on your Mac, to a Markdown note
-in the repo you're working on**, with screenshots inline, ready to hand to a colleague or a coding agent.
+in the repo you're working on**, with screenshots inline, ready for a colleague, or handed straight to
+your coding agent.
 
 ```
 $ cd ~/code/shop && asides
@@ -22,6 +23,10 @@ A few seconds later the transcript is in the note, and the menu-bar icon shows `
   sentence you were saying.
 - **Context for whoever reads it.** Each new note records the git remote, branch, commit and
   uncommitted changes, plus your macOS version, browser and display.
+- **Straight to your agent.** Claude Code, Codex and OpenCode can listen through `asides mcp`, and
+  get each aside as soon as it's transcribed, or a batch when you send it.
+- **Wispr Flow too.** If you dictate with Wispr Flow, your dictations can land in the note next to
+  your recordings.
 - **Native and quiet.** A menu-bar icon and global shortcuts. No Dock icon, no window.
 
 ## Requirements
@@ -97,6 +102,8 @@ self-signed identity in your login keychain and asks for your password.
 | `asides open` | Open the latest note in your Markdown editor. |
 | `asides status` | Show what the app is doing and where it's bound. |
 | `asides export [--out FILE]` | Zip the latest note (text, screenshots, audio) to share it. |
+| `asides send` | Send to Agent: hand what you've recorded to agents listening in batch mode. |
+| `asides mcp` | The MCP server for coding agents. Agents start it themselves; see [Coding agents](#coding-agents). |
 | `asides quit` | Quit the app, after it finishes any queued transcriptions. |
 
 `-C <dir>` runs any command as if it were started in `<dir>`.
@@ -109,6 +116,7 @@ self-signed identity in your login keychain and asks for your password.
 | `⌃⌥N` | Start or stop recording into a new note. |
 | `⌃⌥V` | Attach the image on the clipboard: inline if you're recording, otherwise at the end of the note. |
 | `Esc` | Cancel the recording; nothing is written. Only captured while recording. |
+| `⌃⌥↩` | Send to Agent. Only registered while agents get asides in batches. |
 
 Images you copy while recording are attached automatically.
 
@@ -118,10 +126,13 @@ The icon shows what's happening: idle, recording (red, with a timer), transcribi
 (`✓ #5`) or a problem. Click it to:
 
 - start, stop or cancel recordings, or attach the clipboard image
+- send what you've recorded to your coding agent (in batch mode)
 - switch between recently used repos, or choose another one (**Directory** submenu)
 - open, reveal or copy the path of the latest note
-- change preferences: hold to talk, auto-attaching images, sounds, keeping audio clips, the speech
-  model and the microphone
+- change preferences: hold to talk, auto-attaching images, sounds, keeping audio clips, Wispr Flow
+  dictations, the speech model, the microphone, and how agents get asides
+
+The status line shows when an agent is listening, e.g. `Ready · shop · Claude Code listening`.
 
 ## Notes
 
@@ -163,8 +174,62 @@ And on mobile the button text wraps.
 - **Metadata** is written once, when the note is created.
 - **Entries** are numbered, so people can refer to "#3".
 - **Writes** only ever append, so an editor or agent that has the note open simply reloads it.
-- **Sharing:** pass the note's path to an agent working in the repo, or give colleagues the zip
-  from `asides export`.
+- **Sharing:** let your coding agent listen (below), pass it the note's path, or give colleagues the
+  zip from `asides export`.
+
+## Coding agents
+
+`asides mcp` is an [MCP](https://modelcontextprotocol.io) server. Add it to your agent once:
+
+```bash
+claude mcp add --scope user asides -- asides mcp      # Claude Code
+codex mcp add asides -- asides mcp                    # Codex
+opencode mcp add --global asides -- asides mcp        # OpenCode
+```
+
+Then, in a session in your repo, ask the agent to **listen to your asides** (in Claude Code,
+`/asides:listen` says the same). It waits for your next recording, acts on it as a prompt,
+and waits again, until you stop it. If Asides is bound to another repo, or not running, the agent
+binds it to its own (it may ask you to allow that once).
+
+How asides reach the agent is a preference (**Preferences → Agents Get Asides**, or
+`agent_delivery`):
+
+- **Each aside as it's transcribed** (`each`, the default): every recording becomes a prompt a few
+  seconds after you stop talking.
+- **In batches** (`batch`): recordings wait until you choose **Send to Agent** (`⌃⌥↩`, the menu,
+  or `asides send`). A recording in progress is stopped and included.
+
+The agent gets the transcript, the note's path and your screenshots, both as images and as file
+paths. It can also read the whole latest note on request ("work through my asides", or
+`/asides:asides` in Claude Code).
+
+Agents give up on a tool call after a while: Codex and most others after 60 s, Claude Code much
+later. So the agent's wait ends after 50 s (25 min in Claude Code), and the agent calls again. To
+wait longer in Codex, raise its `tool_timeout_sec` for the server and pass the same wait to asides:
+`codex mcp add asides -- asides mcp --timeout 3000`, then set `tool_timeout_sec = 3600` under
+`[mcp_servers.asides]` in `~/.codex/config.toml`.
+
+## Wispr Flow
+
+If you dictate with [Wispr Flow](https://wisprflow.ai), turn on **Preferences → Add Wispr Flow
+Dictations** (`wispr_flow = true`). Each dictation you make while it's on becomes an entry in the
+latest note, marked with its source:
+
+```markdown
+## 6 · 14:41 · Wispr Flow
+
+The coupon field accepts expired codes.
+```
+
+- Asides reads Wispr Flow's history on your Mac (`~/Library/Application Support/Wispr Flow/flow.sqlite`),
+  read-only, with the system's `sqlite3`. Wispr Flow must keep history on this Mac.
+- Only dictations made after you turn it on are added. List apps in `wispr_flow_apps` (for example
+  `["Safari", "Google Chrome"]`) to add only what you dictate there, so your messages elsewhere stay
+  out of the note.
+- The text is what Wispr Flow typed, formatting included; Asides doesn't change it. Wispr Flow
+  transcribes in its own way, not on your Mac with Whisper.
+- To attach a screenshot, press `⌃⌥V` after the dictation.
 
 ## Settings
 
@@ -179,13 +244,19 @@ keep_audio = false           # keep an .m4a of each recording next to the note
 model = "large-v3-turbo"     # or "large-v3" (more accurate, slower) or "small" (faster, less accurate)
 input_device = ""            # microphone name; empty means the system default
 languages = []               # e.g. ["en", "ro"] to choose only between these; [] means any
+agent_delivery = "each"      # or "batch": agents get asides when you choose Send to Agent
+wispr_flow = false           # add Wispr Flow dictations to the note
+wispr_flow_apps = []         # e.g. ["Safari"] to add only dictations made there; [] means any app
 
 [shortcuts]
 record = "ctrl+alt+Space"
 record_new_note = "ctrl+alt+KeyN"
 attach_image = "ctrl+alt+KeyV"
 cancel = "Escape"
+send_to_agent = "ctrl+alt+Enter"   # only registered with agent_delivery = "batch"
 ```
+
+An empty shortcut (`""`) turns that shortcut off.
 
 If you speak only a few languages, list them in `languages`. Detection on short clips is then much
 more reliable; a single entry skips detection altogether.
@@ -194,8 +265,13 @@ more reliable; a single entry skips detection altogether.
 
 - **Audio** stays on your Mac. It's held in memory until it's transcribed, then discarded, unless
   you turn on "Keep Audio Clips".
-- **The network** is used for one thing only: downloading the model from Hugging Face the first
-  time (or when you switch models).
+- **The network** is used by Asides for one thing only: downloading the model from Hugging Face the
+  first time (or when you switch models).
+- **Agents** talk to `asides mcp` on your Mac, over standard input and output. It reads your notes
+  and passes them to the agent, which may send them on to its model provider, like anything else you
+  give it.
+- **Wispr Flow** transcribes with its own service, under its own terms. Asides only reads the
+  history Wispr Flow keeps on your Mac, and only when you turn the integration on.
 - **Microphone** access is required.
 - **Clipboard:** macOS may ask once whether Asides may paste from other apps, when it reads a
   screenshot from the clipboard. Choose Allow.
@@ -213,6 +289,11 @@ more reliable; a single entry skips detection altogether.
 - **The text came out in the wrong language.** Set `languages` in `config.toml`.
 - **Esc doesn't reach other apps while recording.** That's intentional: Esc cancels the recording.
   It's released again as soon as you stop.
+- **The agent doesn't get my asides.** Check the status line in the menu: it says which agent is
+  listening. If none is, ask the agent to listen to your asides. In batch mode, choose Send to Agent.
+  If the agent works in another repo than the one Asides is bound to, recordings go to the bound one.
+- **Wispr Flow dictations don't show up.** Check that Wispr Flow keeps history on this Mac, and that
+  the app you dictate in matches `wispr_flow_apps`.
 
 ## How it works
 

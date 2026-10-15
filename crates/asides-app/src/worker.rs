@@ -52,9 +52,20 @@ pub struct ImageJob {
     pub model: String,
 }
 
+/// Text another app transcribed (a Wispr Flow dictation), added as an entry of its own.
+pub struct DictationJob {
+    pub dir: PathBuf,
+    pub text: String,
+    pub at: DateTime<Local>,
+    pub source: &'static str,
+    pub new_note: Option<Option<String>>,
+    pub environment: Environment,
+}
+
 pub enum Job {
     Recording(Box<RecordingJob>),
     Image(Box<ImageJob>),
+    Dictation(Box<DictationJob>),
 }
 
 pub enum Outcome {
@@ -82,6 +93,7 @@ pub fn spawn(models: Arc<ModelManager>, done: impl Fn(Outcome) + Send + 'static)
                 let outcome = match job {
                     Job::Recording(job) => process_recording(*job, &models, &mut transcriber),
                     Job::Image(job) => process_image(*job),
+                    Job::Dictation(job) => process_dictation(*job),
                 };
                 done(outcome.unwrap_or_else(|err| Outcome::Failed(format!("{err:#}"))));
             }
@@ -118,7 +130,8 @@ fn process_recording(
     }
 
     let fallback_title = notes::title_from_transcript(&text);
-    let note = target_note(&job.dir, &job.new_note, &fallback_title, job.started, &job.environment, &job.model)?;
+    let note =
+        target_note(&job.dir, &job.new_note, &fallback_title, job.started, &job.environment, &whisper(&job.model))?;
     let number = note.next_entry_number();
     let mut attachments = Vec::new();
     for image in &job.images {
@@ -137,11 +150,27 @@ fn process_recording(
 }
 
 fn process_image(job: ImageJob) -> Result<Outcome> {
-    let note = target_note(&job.dir, &job.new_note, "Untitled", job.image.at, &job.environment, &job.model)?;
+    let note = target_note(&job.dir, &job.new_note, "Untitled", job.image.at, &job.environment, &whisper(&job.model))?;
     let number = note.next_entry_number().saturating_sub(1);
     let attachment = save_image(&note, number, &job.image)?;
     note.append(&attachment.markdown()).context("could not write the note")?;
     Ok(Outcome::ImageAdded { note: note.title })
+}
+
+fn process_dictation(job: DictationJob) -> Result<Outcome> {
+    let fallback_title = notes::title_from_transcript(&job.text);
+    let transcription = format!("asides {} · {}", env!("CARGO_PKG_VERSION"), job.source);
+    let note = target_note(&job.dir, &job.new_note, &fallback_title, job.at, &job.environment, &transcription)?;
+    let number = note.next_entry_number();
+    let time = job.at.format("%H:%M").to_string();
+    note.append(&markdown::compose_dictation_entry(number, &time, job.source, &job.text))
+        .context("could not write the note")?;
+    Ok(Outcome::Appended { note: note.title, number })
+}
+
+/// The front matter's `transcription` for notes started by a recording.
+fn whisper(model: &str) -> String {
+    format!("asides {} · whisper {model} (local)", env!("CARGO_PKG_VERSION"))
 }
 
 /// The latest note, or a newly created one (with front matter) when asked for or when none exists.
@@ -151,7 +180,7 @@ fn target_note(
     fallback_title: &str,
     created: DateTime<Local>,
     environment: &Environment,
-    model: &str,
+    transcription: &str,
 ) -> Result<Note> {
     if new_note.is_none()
         && let Some(note) = notes::latest_note(dir)
@@ -167,7 +196,7 @@ fn target_note(
         macos: environment.macos.clone(),
         browser: environment.browser.clone(),
         display: environment.display.clone(),
-        transcription: format!("asides {} · whisper {model} (local)", env!("CARGO_PKG_VERSION")),
+        transcription: transcription.to_string(),
     };
     notes::create_note(dir, created, &title, &frontmatter::render(&metadata)).context("could not create the note")
 }
