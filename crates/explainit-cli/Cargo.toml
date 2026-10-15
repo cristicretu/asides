@@ -1,0 +1,17 @@
+[package]
+name = "explainit-cli"
+description = "The explainit command: binds a repo to the ExplainIt menu-bar app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "explainit"
+path = "src/main.rs"
+
+[dependencies]
+explainit-core.workspace = true
+anyhow.workspace = true
+clap = { version = "4.6", features = ["derive"] }
