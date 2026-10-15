@@ -88,8 +88,8 @@ The icon shows what's happening: idle, recording (red, with a timer), transcribi
 - start, stop or cancel recordings, or attach the clipboard image
 - switch between recently used repos, or choose another one (**Directory** submenu)
 - open, reveal or copy the path of the latest note
-- flip the on/off preferences (hold to talk, auto-attaching images, sounds, keeping audio clips)
-  with switches that leave the menu open, and choose the speech model and the microphone
+- change preferences: hold to talk, auto-attaching images, sounds, keeping audio clips, the speech
+  model and the microphone
 
 ## Notes
 

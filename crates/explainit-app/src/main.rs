@@ -8,7 +8,6 @@ mod hotkeys;
 mod icons;
 mod macos;
 mod stt;
-mod toggles;
 mod tray;
 mod worker;
 
@@ -39,7 +38,7 @@ use crate::hotkeys::{Action, Hotkeys};
 use crate::icons::Icons;
 use crate::macos::Mic;
 use crate::stt::{ModelManager, ModelState};
-use crate::tray::{MenuAction, Preference, Tray, View};
+use crate::tray::{MenuAction, Tray, View};
 use crate::worker::{CapturedImage, ImageJob, Job, Outcome, RecordingJob};
 
 /// A press shorter than this toggles recording; a longer one is push-to-talk.
@@ -56,7 +55,6 @@ enum UserEvent {
     Work(Outcome),
     Model(&'static str, ModelState),
     Mic(bool),
-    Preference(Preference, bool),
     ConfigFileChanged,
 }
 
@@ -194,11 +192,7 @@ impl App {
 
     fn init(&mut self) {
         let icons = Icons::load();
-        let proxy = self.proxy.clone();
-        let on_toggle = move |preference, on| {
-            let _ = proxy.send_event(UserEvent::Preference(preference, on));
-        };
-        match Tray::new(self.mtm, &self.config, &audio::input_device_names(), &icons.idle, on_toggle) {
+        match Tray::new(&self.config, &audio::input_device_names(), &icons.idle) {
             Ok(mut tray) => {
                 tray.set_directories(&self.recent_dirs, self.bound.as_deref());
                 self.tray = Some(tray);
@@ -244,7 +238,6 @@ impl App {
                 self.refresh();
                 self.publish();
             }
-            UserEvent::Preference(preference, on) => self.update_config(|c| preference.set(c, on)),
             UserEvent::ConfigFileChanged => self.reload_config(),
         }
     }
@@ -306,6 +299,7 @@ impl App {
 
     fn on_menu(&mut self, event: MenuEvent) {
         let Some(action) = self.tray.as_ref().and_then(|t| t.action(&event.id)) else { return };
+        let checked = self.tray.as_ref().is_some_and(|t| t.checked(&action));
         match action {
             MenuAction::Record if self.recording.is_some() => self.stop_recording(),
             MenuAction::Record => self.start_recording(false, None),
@@ -321,6 +315,10 @@ impl App {
             MenuAction::OpenNote => self.with_latest(macos::open),
             MenuAction::RevealNote => self.with_latest(macos::reveal),
             MenuAction::CopyNotePath => self.with_latest(|file| clipboard::copy_text(&file.to_string_lossy())),
+            MenuAction::ToggleHoldToTalk => self.update_config(|c| c.hold_to_talk = checked),
+            MenuAction::ToggleAutoAttach => self.update_config(|c| c.auto_attach_images = checked),
+            MenuAction::ToggleSounds => self.update_config(|c| c.sounds = checked),
+            MenuAction::ToggleKeepAudio => self.update_config(|c| c.keep_audio = checked),
             MenuAction::Model(id) => {
                 self.update_config(|c| c.model = id.clone());
                 self.model_state = None;

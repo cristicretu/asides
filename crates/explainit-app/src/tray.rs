@@ -6,57 +6,11 @@ use std::str::FromStr;
 use explainit_core::config::{Config, pretty_shortcut};
 use explainit_core::models::MODELS;
 use explainit_core::paths::tilde;
-use objc2::MainThreadMarker;
-use objc2::rc::Retained;
-use objc2_app_kit::{NSMenu, NSMenuItem};
-use objc2_foundation::NSString;
 use tray_icon::menu::accelerator::Accelerator;
-use tray_icon::menu::{CheckMenuItem, ContextMenu, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use crate::icons::StatusIcon;
-use crate::toggles::ToggleRow;
-
-/// On/off preferences, shown as switch rows that keep the menu open when flipped.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Preference {
-    HoldToTalk,
-    AutoAttachImages,
-    Sounds,
-    KeepAudio,
-}
-
-impl Preference {
-    const ALL: [Preference; 4] =
-        [Preference::HoldToTalk, Preference::AutoAttachImages, Preference::Sounds, Preference::KeepAudio];
-
-    fn title(self) -> &'static str {
-        match self {
-            Preference::HoldToTalk => "Hold to Talk (tap toggles)",
-            Preference::AutoAttachImages => "Auto-attach Copied Images",
-            Preference::Sounds => "Sounds",
-            Preference::KeepAudio => "Keep Audio Clips",
-        }
-    }
-
-    pub fn get(self, config: &Config) -> bool {
-        match self {
-            Preference::HoldToTalk => config.hold_to_talk,
-            Preference::AutoAttachImages => config.auto_attach_images,
-            Preference::Sounds => config.sounds,
-            Preference::KeepAudio => config.keep_audio,
-        }
-    }
-
-    pub fn set(self, config: &mut Config, on: bool) {
-        match self {
-            Preference::HoldToTalk => config.hold_to_talk = on,
-            Preference::AutoAttachImages => config.auto_attach_images = on,
-            Preference::Sounds => config.sounds = on,
-            Preference::KeepAudio => config.keep_audio = on,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuAction {
@@ -69,6 +23,10 @@ pub enum MenuAction {
     OpenNote,
     RevealNote,
     CopyNotePath,
+    ToggleHoldToTalk,
+    ToggleAutoAttach,
+    ToggleSounds,
+    ToggleKeepAudio,
     Model(String),
     InputDevice(String),
     MicrophoneSettings,
@@ -93,7 +51,10 @@ pub struct Tray {
     open: MenuItem,
     reveal: MenuItem,
     copy_path: MenuItem,
-    toggles: Vec<(Preference, Retained<ToggleRow>)>,
+    hold: CheckMenuItem,
+    auto_attach: CheckMenuItem,
+    sounds: CheckMenuItem,
+    keep_audio: CheckMenuItem,
     models: Vec<(String, CheckMenuItem)>,
     devices: Vec<(String, CheckMenuItem)>,
     microphone_settings: MenuItem,
@@ -114,14 +75,7 @@ pub struct View<'a> {
 }
 
 impl Tray {
-    /// `on_toggle` runs when the user flips a preference switch.
-    pub fn new(
-        mtm: MainThreadMarker,
-        config: &Config,
-        devices: &[String],
-        icon: &StatusIcon,
-        on_toggle: impl Fn(Preference, bool) + Clone + 'static,
-    ) -> anyhow::Result<Tray> {
+    pub fn new(config: &Config, devices: &[String], icon: &StatusIcon) -> anyhow::Result<Tray> {
         let status = MenuItem::new("", false, None);
         let record = MenuItem::new("Start Recording", false, accelerator(&config.shortcuts.record));
         let record_new = MenuItem::new("Start in New Note", false, accelerator(&config.shortcuts.record_new_note));
@@ -135,6 +89,11 @@ impl Tray {
         let reveal = MenuItem::new("Reveal in Finder", false, None);
         let copy_path = MenuItem::new("Copy Note Path", false, None);
 
+        let hold = CheckMenuItem::new("Hold to Talk (tap toggles)", true, config.hold_to_talk, None);
+        let auto_attach =
+            CheckMenuItem::new("Auto-attach Images Copied While Recording", true, config.auto_attach_images, None);
+        let sounds = CheckMenuItem::new("Sounds", true, config.sounds, None);
+        let keep_audio = CheckMenuItem::new("Keep Audio Clips", true, config.keep_audio, None);
         let models: Vec<(String, CheckMenuItem)> = MODELS
             .iter()
             .map(|m| (m.id.to_string(), CheckMenuItem::new(m.label, true, m.id == config.model, None)))
@@ -156,6 +115,11 @@ impl Tray {
         let edit_settings = MenuItem::new("Edit Shortcuts & Settings…", true, None);
         let preferences = Submenu::new("Preferences", true);
         preferences.append_items(&[
+            &hold,
+            &auto_attach,
+            &sounds,
+            &keep_audio,
+            &PredefinedMenuItem::separator(),
             &model_menu,
             &device_menu,
             &PredefinedMenuItem::separator(),
@@ -183,25 +147,6 @@ impl Tray {
             &quit,
         ])?;
 
-        // muda has no view-based items, so the switch rows go straight into the Preferences NSMenu
-        // (muda never re-indexes that submenu after construction).
-        let root: Retained<NSMenu> =
-            unsafe { Retained::retain(menu.ns_menu().cast()) }.ok_or_else(|| anyhow::anyhow!("menu has no NSMenu"))?;
-        let preferences_menu = root
-            .itemWithTitle(&NSString::from_str("Preferences"))
-            .and_then(|item| item.submenu())
-            .ok_or_else(|| anyhow::anyhow!("Preferences submenu not found"))?;
-        let mut toggles = Vec::new();
-        for (i, preference) in Preference::ALL.into_iter().enumerate() {
-            let on_toggle = on_toggle.clone();
-            let (item, row) = ToggleRow::menu_item(mtm, preference.title(), preference.get(config), move |on| {
-                on_toggle(preference, on)
-            });
-            preferences_menu.insertItem_atIndex(&item, i as isize);
-            toggles.push((preference, row));
-        }
-        preferences_menu.insertItem_atIndex(&NSMenuItem::separatorItem(mtm), toggles.len() as isize);
-
         let builder =
             TrayIconBuilder::new().with_menu(Box::new(menu)).with_menu_on_left_click(true).with_tooltip("ExplainIt");
         let builder = if icon.template {
@@ -227,7 +172,10 @@ impl Tray {
             open,
             reveal,
             copy_path,
-            toggles,
+            hold,
+            auto_attach,
+            sounds,
+            keep_audio,
             models,
             devices: devices_items,
             microphone_settings,
@@ -251,6 +199,15 @@ impl Tray {
             (&self.quit, MenuAction::Quit),
         ];
         if let Some((_, action)) = simple.into_iter().find(|(item, _)| item.id() == id) {
+            return Some(action);
+        }
+        let checks = [
+            (&self.hold, MenuAction::ToggleHoldToTalk),
+            (&self.auto_attach, MenuAction::ToggleAutoAttach),
+            (&self.sounds, MenuAction::ToggleSounds),
+            (&self.keep_audio, MenuAction::ToggleKeepAudio),
+        ];
+        if let Some((_, action)) = checks.into_iter().find(|(item, _)| item.id() == id) {
             return Some(action);
         }
         if let Some((dir, _)) = self.directories.iter().find(|(_, item)| item.id() == id) {
@@ -290,11 +247,12 @@ impl Tray {
         }
     }
 
-    /// Reflects a (re)loaded config in switches, check marks and shortcut hints.
+    /// Reflects a (re)loaded config in check marks and shortcut hints.
     pub fn sync_config(&self, config: &Config) {
-        for (preference, row) in &self.toggles {
-            row.set_on(preference.get(config));
-        }
+        self.hold.set_checked(config.hold_to_talk);
+        self.auto_attach.set_checked(config.auto_attach_images);
+        self.sounds.set_checked(config.sounds);
+        self.keep_audio.set_checked(config.keep_audio);
         for (id, item) in &self.models {
             item.set_checked(*id == config.model);
         }
@@ -331,6 +289,16 @@ impl Tray {
         }
         for (dir, item) in &self.directories {
             item.set_checked(Some(dir.as_path()) == current);
+        }
+    }
+
+    pub fn checked(&self, action: &MenuAction) -> bool {
+        match action {
+            MenuAction::ToggleHoldToTalk => self.hold.is_checked(),
+            MenuAction::ToggleAutoAttach => self.auto_attach.is_checked(),
+            MenuAction::ToggleSounds => self.sounds.is_checked(),
+            MenuAction::ToggleKeepAudio => self.keep_audio.is_checked(),
+            _ => false,
         }
     }
 }

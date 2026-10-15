@@ -113,7 +113,8 @@ The user may record a request and ask you to "implement the note". Find it with
 - Changing the status item's icon or title, or a menu item's text, while the menu is open does
   **not** close it (tested). Look elsewhere if the menu closes unexpectedly: focus or activation
   changes, or system prompts.
-- Clicking a standard menu item always closes the menu; view-based items (`toggles.rs`) don't.
+- Clicking a standard menu item always closes the menu. Switch rows (view-based items) stay open,
+  but they were tried for the preferences and reverted: they don't line up with native items.
 - Without a `TrayIconEvent` handler, tray-icon queues an event for every mouse move over the icon,
   forever.
 - Apple's SpeechAnalyzer and FoundationModels are Swift-only, so Rust can't call them without a

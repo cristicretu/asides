@@ -46,8 +46,7 @@ crates/
     main.rs           clap subcommands, `open -g -b <bundle id> <link>`, waits for the app to acknowledge
   explainit-app/      binary `explainit-app`, renamed ExplainIt inside the bundle
     main.rs           App: event loop, UserEvent dispatch, recording state machine, bind(), refresh(), publish()
-    tray.rs           status item and menu (MenuAction, Preference, View, Directory submenu)
-    toggles.rs        switch rows for on/off preferences (view-based items keep the menu open)
+    tray.rs           status item and menu (MenuAction, View, Directory submenu)
     icons.rs          SF Symbols rendered to RGBA for tray-icon
     hotkeys.rs        global shortcuts (Carbon hot keys); Esc registered only while recording
     audio.rs          cpal microphone capture → mono f32 at the device rate
@@ -165,8 +164,5 @@ Break these only on purpose, and update this document when you do.
 - **SF Symbols rendered to bitmaps.** tray-icon takes RGBA; rendering system symbols keeps the
   icons native in light and dark menu bars. tray-icon caps icons at 22 pt, so they are drawn on a
   22 pt canvas at 2×.
-- **Switch rows for preferences.** Standard menu items close the menu when clicked; items with a
-  custom view don't, so on/off preferences are switch rows (as in Control Center). muda has no
-  view-based items, so `Tray::new` inserts them into the Preferences `NSMenu` directly.
 - **Shortcuts through Carbon hot keys** (global-hotkey). They need no Accessibility permission,
   and they report key-up, which makes hold-to-talk possible.

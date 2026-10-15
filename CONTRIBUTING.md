@@ -89,7 +89,7 @@ in your pull request what you tried.
 - [ ] **Menu:**
   - the icon states: idle, red with a timer, ellipsis, `✓ #N`, warning
   - Directory switching: recent repos and Choose Directory… (focus returns to your previous app)
-  - flipping a Preferences switch leaves the menu open and is saved to `config.toml`
+  - every Preferences item is saved to `config.toml`
 - [ ] **Robustness:**
   - a recording started while the previous one is still transcribing
   - AirPods as the microphone
@@ -104,13 +104,11 @@ in your pull request what you tried.
   1. Add the field to `Config` in `config.rs`, with a default so older `config.toml` files still
      load.
   2. Read it where it's needed in the app.
-  3. If it's an on/off setting, add a `Preference` variant in `tray.rs` (`ALL`, `title`, `get`,
-     `set`); it gets a switch row in the menu automatically.
+  3. If it's a toggle, add it to the menu (below).
   4. Document it in the README's Settings block.
 - **A menu item:**
   1. Add a `MenuAction` variant and the item in `tray.rs` (`Tray::new`, `Tray::action`, and
-     `show` or `sync_config` if its state changes). Standard items close the menu when clicked;
-     use a switch row (`toggles.rs`) for anything the user may want to flip several times.
+     `show` or `sync_config` if its state changes).
   2. Handle the action in `App::on_menu`.
   3. Escape `&` in dynamic text with `menu_text`.
 - **A CLI command:**
