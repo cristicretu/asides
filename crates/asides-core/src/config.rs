@@ -135,7 +135,7 @@ pub fn pretty_shortcut(shortcut: &str) -> String {
             key = match lower.as_str() {
                 "escape" | "esc" => "Esc".into(),
                 "space" => "Space".into(),
-                "enter" | "return" => "↩".into(),
+                "enter" | "return" => "Enter".into(),
                 _ => last.strip_prefix("Key").or_else(|| last.strip_prefix("Digit")).unwrap_or(last).to_uppercase(),
             };
         }
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(pretty_shortcut("Escape"), "Esc");
         assert_eq!(pretty_shortcut("ctrl+alt+Digit1"), "⌃⌥1");
         assert_eq!(pretty_shortcut("option+F5"), "⌥F5");
-        assert_eq!(pretty_shortcut("ctrl+alt+Enter"), "⌃⌥↩");
+        assert_eq!(pretty_shortcut("ctrl+alt+Enter"), "⌃⌥Enter");
     }
 
     #[test]

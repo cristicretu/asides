@@ -116,7 +116,7 @@ self-signed identity in your login keychain and asks for your password.
 | `⌃⌥N` | Start or stop recording into a new note. |
 | `⌃⌥V` | Attach the image on the clipboard: inline if you're recording, otherwise at the end of the note. |
 | `Esc` | Cancel the recording; nothing is written. Only captured while recording. |
-| `⌃⌥↩` | Send to Agent. Only registered while agents get asides in batches. |
+| `⌃⌥Enter` | Send to Agent. Only registered while agents get asides in batches. |
 
 Images you copy while recording are attached automatically.
 
@@ -197,7 +197,7 @@ How asides reach the agent is a preference (**Preferences → Agents Get Asides*
 
 - **Each aside as it's transcribed** (`each`, the default): every recording becomes a prompt a few
   seconds after you stop talking.
-- **In batches** (`batch`): recordings wait until you choose **Send to Agent** (`⌃⌥↩`, the menu,
+- **In batches** (`batch`): recordings wait until you choose **Send to Agent** (`⌃⌥Enter`, the menu,
   or `asides send`). A recording in progress is stopped and included.
 
 The agent gets the transcript, the note's path and your screenshots, both as images and as file

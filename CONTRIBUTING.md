@@ -114,9 +114,9 @@ in your pull request what you tried.
 - [ ] **CLI:** closing the terminal after `asides` leaves the app running; `asides quit`
   finishes queued transcriptions first.
 - [ ] **Agents:** with an agent listening, the status line names it; a recording reaches it a few
-  seconds after you stop. In batch mode, `⌃⌥↩` and Send to Agent in the menu deliver everything
+  seconds after you stop. In batch mode, `⌃⌥Enter` and Send to Agent in the menu deliver everything
   recorded so far, including a recording still in progress; in each mode the item is disabled and
-  `⌃⌥↩` stays free for other apps.
+  `⌃⌥Enter` stays free for other apps.
 - [ ] **Wispr Flow:** with Add Wispr Flow Dictations on, a dictation lands in the note marked
   `· Wispr Flow`; with it off, nothing does.
 
