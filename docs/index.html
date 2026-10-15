@@ -377,9 +377,10 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
   transition: width var(--move, 0ms) cubic-bezier(0.4, 0, 0.3, 1), height var(--move, 0ms) cubic-bezier(0.4, 0, 0.3, 1);
 }
 .shot.on { opacity: 1; }
+/* Above the subtitles, which can show at the same moment. */
 .hud {
   position: absolute;
-  bottom: calc(40 * var(--u));
+  bottom: calc(112 * var(--u));
   left: 50%;
   z-index: 9;
   padding: calc(10 * var(--u)) calc(20 * var(--u));
@@ -414,23 +415,54 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
 .pointer.crosshair .cross { display: block; }
 .pointer.down .arrow { transform: scale(0.86); }
 
-.caption { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-top: 20px; min-height: 3em; color: var(--body); }
-.say { transition: opacity 180ms ease, filter 180ms ease; text-wrap: pretty; }
-.say.swap { opacity: 0; filter: blur(2px); }
+/* Subtitles: what the tester says, inside the picture like a video's captions. The box takes the
+   whole sentence's size at once, and the words appear in it as they're spoken. */
+.say {
+  position: absolute;
+  bottom: clamp(10px, 2.6cqw, 26px);
+  left: 50%;
+  z-index: 11;
+  width: max-content;
+  max-width: min(88%, 34em);
+  padding: 0.3em 0.7em;
+  font-size: clamp(14px, 1.85cqw, 18px);
+  font-weight: 500;
+  line-height: 1.4;
+  color: #fff;
+  text-align: center;
+  text-wrap: balance;
+  background: rgba(0, 0, 0, 0.74);
+  border-radius: 0.45em;
+  transform: translateX(-50%);
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+.say:empty, .say.swap { opacity: 0; }
+.say.swap { filter: blur(2px); }
 .say .w { transition: opacity 160ms ease; }
 .say .w.off { opacity: 0; }
-.say .q { color: var(--ink); }
 .replay {
-  flex: none;
-  padding: 0;
-  font: inherit;
-  color: var(--muted);
-  background: none;
+  position: absolute;
+  right: clamp(8px, 1.6cqw, 16px);
+  bottom: clamp(8px, 1.6cqw, 16px);
+  z-index: 11;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px 0 11px;
+  font: 500 0.88em/1 var(--sans);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   border: 0;
+  border-radius: 999px;
   cursor: pointer;
-  transition: color 150ms ease, opacity 200ms ease;
+  transition: background-color 150ms ease, opacity 200ms ease, transform 160ms ease-out;
 }
-.replay[hidden] { display: block; visibility: hidden; opacity: 0; }
+.replay svg { width: 15px; height: 15px; }
+.replay:active { transform: scale(0.97); }
+.replay[hidden] { display: inline-flex; visibility: hidden; opacity: 0; }
 
 /* Features */
 .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px 32px; padding-top: 96px; }
@@ -476,7 +508,8 @@ h2 { font-weight: 600; }
 .foot a { color: var(--ink); text-decoration: none; }
 
 @media (hover: hover) and (pointer: fine) {
-  .nav:hover, .replay:hover { color: var(--ink); }
+  .nav:hover { color: var(--ink); }
+  .replay:hover { background: rgba(0, 0, 0, 0.78); }
   .button:hover { background: #2c2c2e; }
   .copy:hover { border-color: #c7c7cc; }
   .foot a:hover { text-decoration: underline; }
@@ -685,12 +718,13 @@ And the Pay button text wraps.</pre></div>
           </div>
         </div>
         <div class="hud" aria-hidden="true"></div>
+        <p class="say" aria-live="polite"></p>
+        <button class="replay" type="button" hidden>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.75 8a5.25 5.25 0 1 0 1.6-3.78"/><path d="M2.5 2.25v2.5H5"/></svg>
+          Replay
+        </button>
       </div>
     </figure>
-    <div class="caption">
-      <p class="say" aria-live="polite"></p>
-      <button class="replay" type="button" hidden>Replay</button>
-    </div>
   </section>
 
   <section class="wrap features" aria-label="Features">
@@ -790,9 +824,9 @@ ln -s /Applications/Asides.app/Contents/Helpers/asides \
   const shot = $('.shot');
   const hud = device.querySelector('.hud');
   const pointer = $('.pointer');
-  const say = document.querySelector('.say');
-  const replay = document.querySelector('.replay');
-  // The caption is only ever what the tester says.
+  const say = device.querySelector('.say');
+  const replay = device.querySelector('.replay');
+  // The subtitles are only ever what the tester says.
   const sentences = [
     'The summary card needs more padding under the sticky header.',
     'And the Pay button text wraps.',
@@ -853,9 +887,7 @@ ln -s /Applications/Asides.app/Contents/Helpers/asides \
 
   async function speak(sentence, id) {
     const words = sentence.split(' ');
-    const spans = words.map((w, i) =>
-      `<span class="w off">${i === 0 ? '“' : ''}${w}${i === words.length - 1 ? '”' : ''}</span>`);
-    await caption(`<span class="q">${spans.join(' ')}</span>`, id);
+    await caption(words.map((w) => `<span class="w off">${w}</span>`).join(' '), id);
     for (const word of say.querySelectorAll('.w')) {
       await wait(150, id);
       word.classList.remove('off');
