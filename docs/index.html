@@ -21,6 +21,7 @@
   --body: #424245;
   --muted: #6e6e73;
   --line: #e5e5ea;
+  --notch: #e1e1e6;
   --wash: #f5f5f7;
   --paper: #fff;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
@@ -132,13 +133,13 @@ h1 {
   width: clamp(64px, 15%, 112px);
   height: 100%;
   transform: translateX(-50%);
-  background: #000;
+  background: var(--notch);
   border-radius: 0 0 9px 9px;
 }
 /* The small concave fillets where the notch meets the top edge. */
 .notch::before, .notch::after { content: ""; position: absolute; top: 0; width: 6px; height: 6px; }
-.notch::before { left: -6px; background: radial-gradient(circle at 0 100%, transparent 5.5px, #000 6px); }
-.notch::after { right: -6px; background: radial-gradient(circle at 100% 100%, transparent 5.5px, #000 6px); }
+.notch::before { left: -6px; background: radial-gradient(circle at 0 100%, transparent 5.5px, var(--notch) 6px); }
+.notch::after { right: -6px; background: radial-gradient(circle at 100% 100%, transparent 5.5px, var(--notch) 6px); }
 .file { padding: 14px 20px 22px; }
 .path {
   margin-bottom: 16px;
