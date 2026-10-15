@@ -440,29 +440,6 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
 .say.swap { filter: blur(2px); }
 .say .w { transition: opacity 160ms ease; }
 .say .w.off { opacity: 0; }
-.replay {
-  position: absolute;
-  right: clamp(8px, 1.6cqw, 16px);
-  bottom: clamp(8px, 1.6cqw, 16px);
-  z-index: 11;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 14px 0 11px;
-  font: 500 0.88em/1 var(--sans);
-  color: #fff;
-  background: rgba(0, 0, 0, 0.6);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-  border: 0;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background-color 150ms ease, opacity 200ms ease, transform 160ms ease-out;
-}
-.replay svg { width: 15px; height: 15px; }
-.replay:active { transform: scale(0.97); }
-.replay[hidden] { display: inline-flex; visibility: hidden; opacity: 0; }
 
 /* Features */
 .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px 32px; padding-top: 96px; }
@@ -509,7 +486,6 @@ h2 { font-weight: 600; }
 
 @media (hover: hover) and (pointer: fine) {
   .nav:hover { color: var(--ink); }
-  .replay:hover { background: rgba(0, 0, 0, 0.78); }
   .button:hover { background: #2c2c2e; }
   .copy:hover { border-color: #c7c7cc; }
   .foot a:hover { text-decoration: underline; }
@@ -719,10 +695,6 @@ And the Pay button text wraps.</pre></div>
         </div>
         <div class="hud" aria-hidden="true"></div>
         <p class="say" aria-live="polite"></p>
-        <button class="replay" type="button" hidden>
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.75 8a5.25 5.25 0 1 0 1.6-3.78"/><path d="M2.5 2.25v2.5H5"/></svg>
-          Replay
-        </button>
       </div>
     </figure>
   </section>
@@ -832,7 +804,6 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
   const hud = device.querySelector('.hud');
   const pointer = $('.pointer');
   const say = device.querySelector('.say');
-  const replay = device.querySelector('.replay');
   // The subtitles are only ever what the tester says.
   const sentences = [
     'The summary card needs more padding under the sticky header.',
@@ -841,6 +812,11 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
 
   let run = 0;
   let timer;
+  // It plays in a loop while it's on screen; a run that ends off screen starts over when it's
+  // back. With reduced motion it plays once and stays on the note.
+  const loop = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let onScreen = false;
+  let due = true;
 
   const wait = (ms, id) => new Promise((resolve, reject) =>
     setTimeout(() => (id === run ? resolve() : reject()), ms));
@@ -928,7 +904,7 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
 
   async function play() {
     const id = ++run;
-    replay.hidden = true;
+    due = false;
     reset();
     const card = $('.card');
     try {
@@ -1021,24 +997,22 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
       // The front matter first, then down to the new entry.
       await wait(2200, id);
       doc.classList.add('end');
-      await wait(1500, id);
-      replay.hidden = false;
+      if (!loop) return;
+      // A moment to read the note, then from the top.
+      await wait(4000, id);
+      if (onScreen) play(); else due = true;
     } catch {
       // A newer run took over.
     }
   }
 
-  replay.addEventListener('click', play);
-
-  // Play once, when the demo is mostly on screen; until then, show its first frame.
+  // Start when the demo is mostly on screen; until then, show its first frame.
   if ('IntersectionObserver' in window) {
     reset();
-    const seen = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) { seen.disconnect(); play(); }
-    }, { threshold: 0.5 });
-    seen.observe(device);
-  } else {
-    replay.hidden = false;
+    new IntersectionObserver(([e]) => {
+      onScreen = e.isIntersecting;
+      if (onScreen && due) play();
+    }, { threshold: 0.5 }).observe(device);
   }
 })();
 </script>

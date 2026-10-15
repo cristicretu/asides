@@ -200,12 +200,13 @@ certificate in your keychain.
 
 `docs/` is the landing page, served by GitHub Pages from the `docs/` folder on `main`. It's one
 static `index.html` with inline CSS and JavaScript and no build step: open it in a browser to
-preview it (`python3 -m http.server -d docs` serves it at http://localhost:8000). The demo is a
-Mac desktop drawn on a 1024 × 640 grid that scales with the page; on phones it shows a zoomed,
-square part of it that follows the action. What the tester says shows as subtitles inside the picture. `wallpaper.webp` is its background.
-`og.png` is the 1200×630 image shown when the link is shared: the demo frozen mid-recording. After
-changing the demo, regenerate it with `python3 scripts/make-og.py` (it needs Firefox). Pushes to
-`main` that only change `docs/` skip CI; pull requests always run it.
+preview it (`python3 -m http.server -d docs` serves it at http://localhost:8000). The demo is a Mac
+desktop drawn on a 1024 × 640 grid that scales with the page; on phones it shows a zoomed, square
+part of it that follows the action. What the tester says shows as subtitles inside the picture. It
+plays in a loop while it's on screen (once, with reduced motion). `wallpaper.webp` is its
+background. `og.png` is the 1200×630 image shown when the link is shared: the demo frozen
+mid-recording. After changing the demo, regenerate it with `python3 scripts/make-og.py` (it needs
+Firefox). Pushes to `main` that only change `docs/` skip CI; pull requests always run it.
 
 The page repeats the shortcuts, requirements and install steps from the README, so update both
 together.
