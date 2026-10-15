@@ -159,9 +159,15 @@ certificate in your keychain.
    - staples the ticket and checks the result with Gatekeeper
    - writes `dist/Asides-<version>.zip` and prints its SHA-256
    - writes the version and checksum into the Homebrew cask, `Casks/asides.rb`
-4. **Tag and publish:** `git tag v<version> && git push --tags`, then
+   - packs the stapled app into `dist/Asides-<version>.dmg`, with a link to Applications
+4. **Publish the disk image:** `make publish-dmg`. It deploys the image to a Cloudflare Worker
+   that only serves static files (`packaging/download/`), as
+   `https://asides.mihaicristianfarcas.workers.dev/Asides.dmg`, the website's download link. It
+   needs [Wrangler](https://developers.cloudflare.com/workers/wrangler/), logged in to the
+   Cloudflare account. The name stays the same across versions, so the link never changes.
+5. **Tag and publish:** `git tag v<version> && git push --tags`, then
    `gh release create v<version> dist/Asides-<version>.zip`.
-5. **Update Homebrew:** commit `Casks/asides.rb` and push it to `main`. The repository doubles
+6. **Update Homebrew:** commit `Casks/asides.rb` and push it to `main`. The repository doubles
    as a Homebrew tap, so `brew upgrade` sees the release from then on. Push it only after the
    release is published: the cask downloads the zip from it.
 

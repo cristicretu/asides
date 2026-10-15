@@ -57,7 +57,9 @@ crates/
     macos.rs          microphone permission, folder picker, sounds, open/reveal
 packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL scheme
 packaging/Asides.entitlements   microphone entitlement (required by the hardened runtime)
-scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh, release.sh
+packaging/download/   the Cloudflare Worker that serves the website's disk image (static files only)
+scripts/              e2e.sh, make-fixtures.sh, signing-identity.sh, make-signing-cert.sh, release.sh,
+                      make-dmg.sh, publish-dmg.sh
 docs/                 the website (GitHub Pages): index.html, favicon.svg, og.png
 Casks/asides.rb       the Homebrew cask; the repository doubles as a tap
 ```

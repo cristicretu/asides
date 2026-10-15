@@ -1,0 +1,9 @@
+// The website's download: a Cloudflare Worker that only serves static files, no code.
+// scripts/publish-dmg.sh copies the disk image and _redirects into dist/download, then deploys.
+{
+  "name": "asides",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "../../dist/download" },
+  "workers_dev": true,
+  "preview_urls": false
+}

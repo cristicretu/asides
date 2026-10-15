@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds Asides.app (with the CLI inside), signs it with a Developer ID certificate and a secure
-# timestamp, has Apple notarize it, staples the ticket and zips it for a GitHub release.
+# timestamp, has Apple notarize it, staples the ticket, and zips it for a GitHub release and packs it
+# into a disk image for the website.
 #
 # One-time setup: store notarytool credentials under a profile name (an app-specific password from
 # account.apple.com), then run `make release`:
@@ -47,6 +48,9 @@ spctl --assess --type execute --verbose=2 "$APP"
 SHA=$(shasum -a 256 "$ZIP" | cut -d' ' -f1)
 # The Homebrew cask installs this exact zip from the GitHub release.
 sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/asides.rb
+# The website's download button serves a disk image of the same stapled app.
+scripts/make-dmg.sh "$APP" "dist/Asides-$VERSION.dmg"
 echo "SHA-256: $SHA"
 echo "Ready: $ZIP"
 echo "Updated Casks/asides.rb; commit it after publishing the GitHub release."
+echo "Publish the disk image behind the website's download button with \`make publish-dmg\`."

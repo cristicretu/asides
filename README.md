@@ -55,9 +55,9 @@ your settings and the speech model.
 
 ### Download
 
-Download `Asides-<version>.zip` from the
-[Releases page](https://github.com/mihaicristianfarcas/asides/releases). Unzip it, move
-`Asides.app` to `/Applications`, and link the command that ships inside it:
+Download the [disk image](https://asides.mihaicristianfarcas.workers.dev/Asides.dmg) (or
+`Asides-<version>.zip` from the [Releases page](https://github.com/mihaicristianfarcas/asides/releases)),
+drag `Asides.app` to `/Applications`, and link the command that ships inside it:
 
 ```bash
 mkdir -p ~/.local/bin

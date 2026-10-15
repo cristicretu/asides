@@ -19,7 +19,7 @@ CARGO_FEATURES := $(if $(FEATURES),--features asides-app/$(FEATURES))
 
 FIXTURES   := tests/fixtures/en_bug.wav tests/fixtures/ro_bug.wav tests/fixtures/screenshot.png
 
-.PHONY: build test test-speech bundle install uninstall release e2e cert fixtures clean
+.PHONY: build test test-speech bundle install uninstall release publish-dmg e2e cert fixtures clean
 
 build:
 	cargo build --release --workspace $(CARGO_FEATURES)
@@ -65,6 +65,11 @@ uninstall:
 # dist/Asides-<version>.zip. Needs a notarytool profile (NOTARY_PROFILE, default asides-notary).
 release:
 	scripts/release.sh
+
+# Deploys dist/Asides-<version>.dmg (from `make release`) behind the website's download button,
+# on Cloudflare. Needs Wrangler, logged in.
+publish-dmg:
+	scripts/publish-dmg.sh
 
 # End-to-end test against an installed build with the dev hooks (feeds WAV fixtures instead of the mic).
 e2e: fixtures
