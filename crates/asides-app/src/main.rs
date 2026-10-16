@@ -21,6 +21,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use asides_core::agents::{self, Listener};
 use asides_core::config::{AgentDelivery, Config};
+use asides_core::install;
 use asides_core::link::Link;
 use asides_core::models::ModelSpec;
 use asides_core::notes;
@@ -40,7 +41,7 @@ use tray_icon::menu::MenuEvent;
 use crate::environment::Environment;
 use crate::hotkeys::{Action, Hotkeys};
 use crate::icons::Icons;
-use crate::macos::Mic;
+use crate::macos::{CommandLink, Mic};
 use crate::stt::{ModelManager, ModelState};
 use crate::tray::{MenuAction, Tray, View};
 use crate::worker::{CapturedImage, DictationJob, ImageJob, Job, Outcome, RecordingJob};
@@ -54,6 +55,8 @@ const ERROR_ICON: Duration = Duration::from_secs(6);
 const MIN_RECORDING_SECS: f32 = 0.3;
 /// An agent that stopped waiting this recently is still listening: it's working on the last asides.
 const LISTENING_GRACE_MS: u64 = 10 * 60 * 1000;
+/// How long the outcome of a Send to Agent stays in the menu bar.
+const SENT_FLASH: Duration = Duration::from_secs(4);
 
 enum UserEvent {
     HotKey(GlobalHotKeyEvent),
@@ -64,6 +67,7 @@ enum UserEvent {
     ConfigFileChanged,
     Wispr(Result<Dictation, String>),
     Listeners(Vec<Listener>),
+    CommandLinked(CommandLink),
 }
 
 struct Recording {
@@ -107,11 +111,14 @@ struct App {
     mic: Mic,
     keys_down: HashSet<u32>,
     last_request: Option<String>,
-    /// The last Send to Agent, published in `state.json` for `asides mcp`.
-    agent_send: Option<AgentSend>,
+    /// The last Send to Agent in each directory, newest first, published in `state.json` for the
+    /// agents listening.
+    agent_sends: Vec<AgentSend>,
     /// Send to Agent was chosen while recordings were still being transcribed.
     pending_send: bool,
     listeners: Vec<Listener>,
+    /// The user declined to put the `asides` command on the PATH (published, so it's asked once).
+    command_link_declined: bool,
     /// Set to stop watching Wispr Flow's history.
     wispr: Option<Arc<AtomicBool>>,
     quit_when_idle: bool,
@@ -175,7 +182,8 @@ impl App {
         let previous = AppState::read(&paths::state_path()).unwrap_or_default();
         let bound = previous.bound_dir.filter(|d| d.is_dir());
         let pending_new = bound.as_ref().and(previous.pending_new);
-        let agent_send = previous.agent_send;
+        let agent_sends = previous.agent_sends;
+        let command_link_declined = previous.command_link_declined;
         let mut recent_dirs: Vec<PathBuf> = previous.recent_dirs.into_iter().filter(|d| d.is_dir()).collect();
         if let Some(dir) = &bound {
             app_state::remember_dir(&mut recent_dirs, dir);
@@ -201,9 +209,10 @@ impl App {
             mic: macos::mic_status(),
             keys_down: HashSet::new(),
             last_request: None,
-            agent_send,
+            agent_sends,
             pending_send: false,
             listeners: Vec::new(),
+            command_link_declined,
             wispr: None,
             quit_when_idle: false,
             quit: false,
@@ -241,9 +250,27 @@ impl App {
             proxy.send_event(UserEvent::Listeners(listeners)).is_ok()
         });
         self.sync_wispr();
+        self.link_command();
         self.refresh_latest();
         self.refresh();
         self.publish();
+    }
+
+    /// The first time a copy installed by hand runs, puts the `asides` command on the PATH, as the
+    /// Homebrew cask does: /usr/local/bin/asides → the CLI in the bundle. Skipped when an `asides`
+    /// is already set up, or once the user declined the password prompt.
+    fn link_command(&self) {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        // …/Asides.app/Contents/MacOS/Asides
+        let app = std::env::current_exe().ok().and_then(|exe| exe.ancestors().nth(3).map(Path::to_path_buf));
+        let Some(cli) = app.and_then(|app| install::installed_cli(&app, &home)) else { return };
+        if self.command_link_declined || install::command_installed(&install::command_dirs(&home)) {
+            return;
+        }
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let _ = proxy.send_event(UserEvent::CommandLinked(macos::link_command(&cli)));
+        });
     }
 
     fn handle(&mut self, event: UserEvent) {
@@ -269,6 +296,18 @@ impl App {
             UserEvent::Listeners(listeners) => {
                 self.listeners = listeners;
                 self.refresh();
+            }
+            UserEvent::CommandLinked(CommandLink::Linked) => {
+                let status = format!("You can now run `asides` in any terminal ({})", install::LINK);
+                self.flash = Some((Instant::now() + SENT_FLASH, "asides".into(), status));
+                self.refresh();
+            }
+            UserEvent::CommandLinked(CommandLink::Declined) => {
+                self.command_link_declined = true;
+                self.publish();
+            }
+            UserEvent::CommandLinked(CommandLink::Failed(message)) => {
+                self.fail(format!("Could not add the asides command to {}: {message}", install::LINK));
             }
         }
     }
@@ -590,6 +629,7 @@ impl App {
 
     /// Hands what's been recorded so far to agents listening in batch mode. A recording in
     /// progress is stopped first, and the batch goes out once every recording is transcribed.
+    /// With no agent listening, nothing is sent: the batch waits for the next send.
     fn send_to_agent(&mut self) {
         if self.bound.is_none() {
             return self.fail("Not bound to a directory. Run `asides` in a repo first.".into());
@@ -607,39 +647,54 @@ impl App {
         }
         self.pending_send = false;
         let Some(dir) = self.bound.clone() else { return };
+        let Some((agents, waiting)) = self.listening() else {
+            return self.fail(
+                "No agent is listening. Ask your coding agent to listen to your asides, then send again.".into(),
+            );
+        };
         let latest = notes::latest_note(&dir);
-        self.agent_send = Some(AgentSend {
+        let send = AgentSend {
             at_ms: now_ms(),
             entry: latest.as_ref().map_or(0, |n| n.next_entry_number() - 1),
             note: latest.map(|n| n.dir),
             dir,
-        });
-        let status = match self.listening() {
-            Some(agents) => format!("Sent to {agents}"),
-            None => "Sent, but no agent is listening right now".into(),
         };
-        self.flash = Some((Instant::now() + FLASH, "Sent".into(), status));
+        app_state::remember_send(&mut self.agent_sends, send);
+        let (title, status) = if waiting {
+            ("Sent", format!("Sent to {agents}"))
+        } else {
+            ("Queued", format!("Queued: {agents} gets them when it's done with the last ones"))
+        };
+        self.flash = Some((Instant::now() + SENT_FLASH, title.into(), status));
         self.sound("Glass");
         self.refresh();
         self.publish();
     }
 
-    /// The agents listening in the bound directory, e.g. "Claude Code" or "Claude Code and Codex".
-    fn listening(&self) -> Option<String> {
+    /// The agents listening in the bound directory, e.g. "Claude Code" or "Claude Code and Codex",
+    /// and whether one of them is waiting for asides right now; otherwise they're all working on
+    /// the last ones they got.
+    fn listening(&self) -> Option<(String, bool)> {
         let now = now_ms();
         let mut names: Vec<String> = Vec::new();
+        let mut waiting = false;
         for listener in &self.listeners {
             let active = listener.waiting || now.saturating_sub(listener.updated_ms) < LISTENING_GRACE_MS;
+            if !active || Some(&listener.dir) != self.bound.as_ref() {
+                continue;
+            }
+            waiting |= listener.waiting;
             let name = agents::client_label(&listener.client);
-            if active && Some(&listener.dir) == self.bound.as_ref() && !names.contains(&name) {
+            if !names.contains(&name) {
                 names.push(name);
             }
         }
-        match names.as_slice() {
-            [] => None,
-            [one] => Some(one.clone()),
-            [rest @ .., last] => Some(format!("{} and {last}", rest.join(", "))),
-        }
+        let names = match names.as_slice() {
+            [] => return None,
+            [one] => one.clone(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        };
+        Some((names, waiting))
     }
 
     /// Starts or stops watching Wispr Flow's history to match the settings.
@@ -754,7 +809,8 @@ impl App {
         } else if let Some(dir) = &dir_name {
             let status = match (&error_text, self.listening()) {
                 (Some(message), _) => format!("⚠ {message}"),
-                (None, Some(agents)) => format!("Ready · {dir} · {agents} listening"),
+                (None, Some((agents, true))) => format!("Ready · {dir} · {agents} listening"),
+                (None, Some((agents, false))) => format!("Ready · {dir} · {agents} working on your asides"),
                 (None, None) => format!("Ready · {dir}"),
             };
             ("idle", &icons.idle, None, status)
@@ -781,7 +837,7 @@ impl App {
             note_info,
             has_note: self.latest.is_some(),
             send_label: match self.listening() {
-                Some(agents) if !agents.contains(" and ") => format!("Send to {agents}"),
+                Some((agents, _)) if !agents.contains(" and ") => format!("Send to {agents}"),
                 _ => "Send to Agent".into(),
             },
             send_enabled: self.config.agent_delivery == AgentDelivery::Batch && self.bound.is_some(),
@@ -829,7 +885,8 @@ impl App {
             microphone: self.mic.as_str().into(),
             last_request: self.last_request.clone(),
             recent_dirs: self.recent_dirs.clone(),
-            agent_send: self.agent_send.clone(),
+            agent_sends: self.agent_sends.clone(),
+            command_link_declined: self.command_link_declined,
             updated_ms: now_ms(),
         };
         if let Err(err) = state.write(&paths::state_path()) {

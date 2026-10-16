@@ -23,8 +23,12 @@ pub struct AppState {
     pub last_request: Option<String>,
     /// Directories bound recently, most recent first (shown in the menu for quick switching).
     pub recent_dirs: Vec<PathBuf>,
-    /// The last Send to Agent: agents listening in batch mode deliver everything up to it.
-    pub agent_send: Option<AgentSend>,
+    /// The last Send to Agent in each directory, newest first. Agents listening in batch mode
+    /// deliver everything up to the newest; an agent that starts listening in a directory begins
+    /// its first batch after that directory's last one.
+    pub agent_sends: Vec<AgentSend>,
+    /// The user declined to put the `asides` command in /usr/local/bin; don't ask again.
+    pub command_link_declined: bool,
     pub updated_ms: u64,
 }
 
@@ -42,6 +46,13 @@ pub struct AgentSend {
 
 /// How many directories the menu offers for quick switching.
 pub const MAX_RECENT_DIRS: usize = 8;
+
+/// Puts `send` first in `sends`, replacing its directory's previous one, within the limit.
+pub fn remember_send(sends: &mut Vec<AgentSend>, send: AgentSend) {
+    sends.retain(|s| s.dir != send.dir);
+    sends.insert(0, send);
+    sends.truncate(MAX_RECENT_DIRS);
+}
 
 /// Moves `dir` to the front of `recent`, dropping duplicates and the oldest beyond the limit.
 pub fn remember_dir(recent: &mut Vec<PathBuf>, dir: &Path) {
@@ -87,7 +98,7 @@ mod tests {
             status: "idle".into(),
             last_request: Some("abc".into()),
             recent_dirs: vec!["/x".into(), "/y".into()],
-            agent_send: Some(AgentSend { at_ms: 7, dir: "/x".into(), note: Some("/x/.asides/n".into()), entry: 3 }),
+            agent_sends: vec![AgentSend { at_ms: 7, dir: "/x".into(), note: Some("/x/.asides/n".into()), entry: 3 }],
             ..Default::default()
         };
         state.write(&path).unwrap();
@@ -100,7 +111,17 @@ mod tests {
         let path = tmp.path().join("state.json");
         fs::write(&path, r#"{"pid": 1, "status": "idle"}"#).unwrap();
         let state = AppState::read(&path).unwrap();
-        assert_eq!((state.recent_dirs, state.agent_send), (Vec::<PathBuf>::new(), None));
+        assert_eq!((state.recent_dirs, state.agent_sends), (Vec::<PathBuf>::new(), Vec::new()));
+    }
+
+    #[test]
+    fn remembers_the_last_send_in_each_dir() {
+        let send = |at_ms, dir: &str| AgentSend { at_ms, dir: dir.into(), ..Default::default() };
+        let mut sends = Vec::new();
+        for (at, dir) in [(1, "/a"), (2, "/b"), (3, "/a")] {
+            remember_send(&mut sends, send(at, dir));
+        }
+        assert_eq!(sends, [send(3, "/a"), send(2, "/b")]);
     }
 
     #[test]

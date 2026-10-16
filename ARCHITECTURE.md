@@ -35,8 +35,9 @@ How asides fits together, for anyone about to change it. User-facing behavior is
   or file-related.
 - **Agents read, the app writes.** `asides mcp` is started by a coding agent, one per agent
   session. It only reads notes and the app's published state, and hands new entries to the agent.
-  The app never talks to it directly: it publishes batch sends in `state.json`, and shows the
-  listener records the server writes.
+  Claude Code also runs `asides listen` in the background, which prints the same deliveries. The
+  app never talks to either directly: it publishes batch sends in `state.json`, and shows the
+  listener records they write.
 
 ## Code map
 
@@ -49,7 +50,8 @@ crates/
     project.rs        bind rules (git root or the current directory), git facts, .git/info/exclude
     link.rs           asides:// link format (the CLI → app protocol)
     state.rs          state.json (the app → CLI protocol), recent directories, batch sends
-    agents.rs         what a listening agent has seen and what's new (Cursor, collect), listener records
+    agents.rs         what a listening agent has seen and what's new (Cursor, Listening), listener records
+    install.rs        where a hand-installed app links the `asides` command, and whether one is set up
     wispr.rs          Wispr Flow's dictation history (flow.sqlite through the system's sqlite3)
     config.rs         config.toml schema and defaults, shortcut pretty-printing
     models.rs         Whisper model catalog (file names, sizes, SHA-256)
@@ -57,7 +59,8 @@ crates/
     paths.rs          bundle ID, URL scheme, Application Support paths, tilde()
   asides-cli/      shipped inside the bundle as Asides.app/Contents/Helpers/asides
     main.rs           clap subcommands, `open -g -b <bundle id> <link>`, waits for the app to acknowledge
-    mcp.rs            `asides mcp`: the MCP server (tools wait_for_asides and get_asides, prompts)
+    mcp.rs            `asides mcp`: the MCP server (tools wait_for_asides, get_asides, bind_asides; prompts)
+    listen.rs         `asides listen`: deliveries on stdout, for agents watching it in the background
   asides-app/      binary `asides-app`, renamed Asides inside the bundle
     main.rs           App: event loop, UserEvent dispatch, recording state machine, bind(), refresh(), publish()
     tray.rs           status item and menu (MenuAction, View, Directory submenu)
@@ -69,12 +72,14 @@ crates/
     stt.rs            ModelManager (download, verify, wait), Transcriber (whisper-rs), language choice
     clipboard.rs      NSPasteboard: images (PNG, TIFF, file URLs), change counter, copy text
     environment.rs    macOS version, frontmost or last-active browser, display (note metadata)
-    macos.rs          microphone permission, folder picker, sounds, open/reveal
-packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL scheme
+    macos.rs          microphone permission, folder picker, sounds, open/reveal, the command link
+packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL scheme, icon
+packaging/Asides.icns the app icon, drawn by scripts/make-icon.swift
 packaging/Asides.entitlements   microphone entitlement (required by the hardened runtime)
 packaging/download/   the Cloudflare Worker that serves the website's disk image (static files only)
 scripts/              e2e.sh (+ e2e-mcp.py, a scripted agent), make-fixtures.sh, signing-identity.sh,
-                      make-signing-cert.sh, release.sh, make-dmg.sh, publish-dmg.sh, make-og.py
+                      make-signing-cert.sh, release.sh, make-dmg.sh, publish-dmg.sh, make-og.py,
+                      make-icon.swift
 docs/                 the website (GitHub Pages): index.html, wallpaper.webp, favicon.svg, og.png
 Casks/asides.rb       the Homebrew cask; the repository doubles as a tap
 ```
@@ -138,25 +143,35 @@ checks `wispr_flow_apps` and the binding, consumes a pending "new note" request 
 would, and submits a `Job::Dictation`. The worker appends `## N · HH:MM · Wispr Flow` and the text,
 as Wispr Flow typed it.
 
-### Agents (`asides mcp`)
+### Agents (`asides mcp`, `asides listen`)
 
 1. The agent starts `asides mcp` in its working directory, which resolves to the repo like
-   `asides` does. The server starts its `Cursor` at the end of the latest note: only entries written
-   from then on are new.
-2. The agent calls `wait_for_asides`. If the app isn't running or is bound elsewhere, the call
-   returns at once and says so; the agent then calls `bind_asides`, which binds the app like
-   `asides` does. Otherwise the server writes `listeners/<pid>.json` (`waiting: true`).
-3. The server polls every 400 ms, reading `config.toml` for `agent_delivery`:
+   `asides` does. When the user asks it to listen, the `listen` prompt tells Claude Code to run
+   `asides listen` with its Monitor tool, and other agents to call `wait_for_asides` in a loop.
+2. Listening starts with the first wait (or with `asides listen`), as an `agents::Listening`:
+   - `each`: the cursor starts at the end of the notes; only entries written from then on are new.
+   - `batch`: the cursor starts after the last Send to Agent in this directory (or at the start of
+     the latest note), so the next batch includes asides recorded before the agent listened.
+   - Sends made before listening started are ignored: the user chose them with nobody listening.
+3. If the app isn't running or is bound elsewhere, `wait_for_asides` returns at once and says so;
+   the agent then calls `bind_asides`, which binds the app like `asides` does. Otherwise the server
+   writes `listeners/<pid>.json` (`waiting: true` during a wait). `asides listen` writes its own,
+   always waiting, and prints a notice instead.
+4. Both poll every 400 ms, reading `config.toml` for `agent_delivery`:
    - `each`: any entry after the cursor, plus text added to the last delivered entry (an image
      attached after it).
-   - `batch`: only once `state.json`'s `agent_send` is newer than the last one acted on and names
-     this directory; then the entries up to its note and entry number. The app publishes
-     `agent_send` after Send to Agent, once queued recordings are transcribed.
-4. It returns the entries (text with absolute links, then the screenshots as images) and moves the
-   cursor past them. With nothing new by the deadline (50 s, or 25 min for Claude Code, whose tool
-   calls may last longer), it says so and the agent calls again. Progress notifications every 20 s
-   keep the call alive in clients that time out idle calls.
-5. When the agent hangs up (stdin closes), the listener record is removed.
+   - `batch`: only once the newest of `state.json`'s `agent_sends` is newer than the last one acted
+     on and names this directory; then the entries up to its note and entry number. The app
+     publishes a send after Send to Agent, once queued recordings are transcribed, and only when an
+     agent is listening there; otherwise it says no agent is listening and sends nothing.
+5. The server returns the entries (text with absolute links, then the screenshots as images) and
+   moves the cursor past them. With nothing new by the deadline (50 s, or 25 min for Claude Code,
+   whose tool calls may last longer), it says so and the agent calls again. Progress notifications
+   every 20 s keep the call alive in clients that time out idle calls. `asides listen` prints each
+   delivery as one block; with `--timeout` it stops and prints the command that carries on, its
+   position in an `--after` token.
+6. When the agent hangs up (stdin closes), or `asides listen` is stopped, the listener record is
+   removed.
 
 ## Invariants
 
@@ -189,7 +204,8 @@ Break these only on purpose, and update this document when you do.
     optional clipboard prompt). Features that would require Accessibility, Input Monitoring or
     Screen Recording change what users must trust.
 12. **`asides mcp` writes nothing to stdout but JSON-RPC.** Anything else breaks the agent's
-    connection. It never writes notes. Its only effect on the app is `bind_asides`; the other tools
+    connection. `asides listen` writes only deliveries and notices: each burst of output is a
+    notification in the agent's chat. It never writes notes. Its only effect on the app is `bind_asides`; the other tools
     stay read-only (and marked so), because agents like Codex ask before every call to a tool that
     isn't.
 
@@ -199,9 +215,10 @@ Break these only on purpose, and update this document when you do.
 |---|---|---|
 | `<dir>/.asides/…` | worker | the user's notes; excluded from git locally |
 | `~/Library/Application Support/Asides/config.toml` | app (menu), user | reloaded on change; unknown fields ignored, missing ones defaulted |
-| `~/Library/Application Support/Asides/state.json` | app | binding, pending new note, status, recent directories, last acknowledged request |
+| `~/Library/Application Support/Asides/state.json` | app | binding, pending new note, status, recent directories, last acknowledged request, last Send to Agent, whether the user declined the command link |
+| `/usr/local/bin/asides` | app | for a copy installed by hand: a link to the CLI in the bundle, made on first launch |
 | `~/Library/Application Support/Asides/models/` | download thread | `.part` while downloading, renamed after the SHA-256 check |
-| `~/Library/Application Support/Asides/listeners/<pid>.json` | `asides mcp` | one per agent session listening; stale ones removed by the app |
+| `~/Library/Application Support/Asides/listeners/<pid>.json` | `asides mcp`, `asides listen` | one per agent session listening; stale ones removed by the app |
 | `~/Library/Application Support/Wispr Flow/flow.sqlite` | Wispr Flow | read-only, only with `wispr_flow` on. Dev-hooks builds read `Asides/test-wispr-flow.sqlite` instead when it exists (end-to-end test) |
 
 ## Design decisions
@@ -223,10 +240,19 @@ Break these only on purpose, and update this document when you do.
   22 pt canvas at 2×.
 - **Shortcuts through Carbon hot keys** (global-hotkey). They need no Accessibility permission,
   and they report key-up, which makes hold-to-talk possible.
-- **Agents wait in a tool call.** MCP has no portable way for a server to start a turn in the
-  agent, so `wait_for_asides` blocks until there's something to deliver, and its description and
-  result tell the agent to call it again. It works the same in every client. Claude Code's
-  channels can push into a session, but they need a development flag in every session.
+- **Agents wait in a tool call, or watch a command.** MCP has no portable way for a server to start
+  a turn in the agent, so `wait_for_asides` blocks until there's something to deliver, and its
+  description and result tell the agent to call it again. It works the same in every client, but
+  the agent is busy while it waits, and tool results are hidden. Claude Code can watch a command's
+  output in the background (its Monitor tool), with each burst a notification in the chat, so there
+  `asides listen` delivers instead: the user sees each aside, and the agent is free in between.
+  Claude Code's channels could push into a session too, but they need a development flag in every
+  session.
+- **The command link in /usr/local/bin.** It's on every shell's default `PATH`, unlike
+  `~/.local/bin`, so a download works without editing shell profiles. It usually belongs to root,
+  hence the one-time administrator prompt (`osascript … with administrator privileges`). The
+  Homebrew cask links into Homebrew's `bin` instead, and the app leaves any existing `asides`
+  alone, so the two never collide.
 - **Wispr Flow through its history, read with `/usr/bin/sqlite3`.** Wispr Flow has no public API
   for its dictations, and its local database is the record of them. The system's `sqlite3`
   (`-readonly -json`) avoids compiling SQLite into the app. Its schema changes between versions, so

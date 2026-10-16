@@ -167,3 +167,49 @@ check("and the server keeps serving", client.call("ping") == {})
 client.proc.stdin.close()
 client.proc.wait(timeout=10)
 check("hanging up removes the listener record", not os.path.exists(record))
+
+# asides listen: the same asides on standard output, for agents that watch a command in the background.
+env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+env["AI_AGENT"] = "codex"
+listen = subprocess.Popen([cli, "-C", repo, "listen"], stdout=subprocess.PIPE, text=True, bufsize=1, env=env)
+lines = queue.Queue()
+threading.Thread(target=lambda: [lines.put(line) for line in listen.stdout], daemon=True).start()
+
+
+def heard(needle, timeout):
+    seen = ""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            seen += lines.get(timeout=max(0.05, deadline - time.time()))
+        except queue.Empty:
+            break
+        if needle in seen:
+            return seen
+    return seen
+
+
+started = heard("Listening for asides in", 10)
+check("asides listen says it's listening, and how asides arrive", "in batches" in started, started)
+time.sleep(1)
+with open(os.path.join(listeners, f"{listen.pid}.json")) as f:
+    listener = json.load(f)
+check("it shows as a listener, named after the agent running it",
+      listener["waiting"] and listener["client"] == "Codex", listener)
+before = entries()
+simulate("en_bug.wav")
+wait_for_entries(before + 1)
+time.sleep(2.5)  # the app reads the listener records every 2 s
+sent = subprocess.run([cli, "-C", repo, "send"], check=True, capture_output=True, text=True).stdout
+check("asides send reaches it", sent.startswith("Sent"), sent)
+batch = heard("padding on the summary card", 30)
+check("the batch is printed as one block", "A new aside from the user." in batch and "## " in batch, batch)
+listen.terminate()
+listen.wait(timeout=10)
+check("stopping it removes its listener record", not os.path.exists(os.path.join(listeners, f"{listen.pid}.json")))
+
+# Nobody listening: nothing is sent, and the user is told.
+time.sleep(2.5)
+nobody = subprocess.run([cli, "-C", repo, "send"], capture_output=True, text=True)
+check("with no agent listening, Send to Agent says so and sends nothing",
+      nobody.returncode != 0 and "No agent is listening" in nobody.stderr, nobody.stdout + nobody.stderr)

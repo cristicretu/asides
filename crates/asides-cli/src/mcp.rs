@@ -2,6 +2,8 @@
 //! asides to a coding agent (Claude Code, Codex, OpenCode, …) as prompts. Agents wait for new
 //! entries with `wait_for_asides`: each one as soon as it's transcribed, or in batches when the
 //! user chooses Send to Agent (`agent_delivery` in config.toml). `get_asides` reads a whole note.
+//! Agents that can watch a command in the background (Claude Code's Monitor tool) are told to run
+//! `asides listen` instead, so they stay free between asides.
 //!
 //! The server only reads notes and the app's published state, so both tools are read-only (agents
 //! such as Codex run those without asking). Its one effect on the app is `bind_asides`, which binds
@@ -16,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use asides_core::agents::{self, Cursor, Item, Listener};
+use asides_core::agents::{self, Cursor, Item, Listener, Listening};
 use asides_core::config::{AgentDelivery, Config};
 use asides_core::link::Link;
 use asides_core::notes::{self, Note};
@@ -41,15 +43,17 @@ const MAX_INLINE_IMAGES: usize = 6;
 const INSTRUCTIONS: &str = "Asides lets the user talk while they test their app: they press a shortcut, \
 speak (a bug, a request, an idea), and Asides transcribes it on their Mac and appends it to a Markdown \
 note in this repo (.asides/<date title>/notes.md), with screenshots inline. Each aside is a request from \
-the user. When the user asks you to listen to their asides, call wait_for_asides, act on what you get, \
-then call it again; keep listening until they tell you to stop. If it says Asides is bound to another \
-directory or isn't running, call bind_asides so recordings come to this repo. When they ask you to work \
-through their notes, call get_asides. Transcripts are verbatim speech-to-text: expect misheard words, \
-especially names of projects, files and libraries.";
+the user. When the user asks you to listen to their asides and you can watch a command's output in the \
+background (Claude Code's Monitor tool), run `asides listen` that way: each aside arrives as an event. \
+Otherwise call wait_for_asides, act on what you get, then call it again; the user can't see its results, \
+so first list the asides you got, one short line each. Keep listening until they tell you to stop. If \
+Asides is bound to \
+another directory or isn't running, call bind_asides so recordings come to this repo. When they ask you \
+to work through their notes, call get_asides. Transcripts are verbatim speech-to-text: expect misheard \
+words, especially names of projects, files and libraries.";
 
-const LISTEN_PROMPT: &str = "Listen to my asides. Call the wait_for_asides tool; whenever it returns asides, \
-treat each one as a request from me and act on it, then call wait_for_asides again. If it returns none, \
-call it again straight away. Keep listening until I tell you to stop.";
+/// How long one `asides listen` runs when an agent starts it, just under the Monitor tool's 30 min.
+const LISTEN_SECS: u64 = 29 * 60;
 
 /// Where the server stands: what this agent has been given so far.
 struct Session {
@@ -57,10 +61,19 @@ struct Session {
     client: String,
     /// Wait in seconds when a call doesn't say; `None` picks one for the client.
     timeout: Option<u64>,
-    cursor: Cursor,
-    /// The last Send to Agent already acted on (`AgentSend::at_ms`).
-    last_send: u64,
+    /// Set by the first wait: asides from before the agent listened aren't handed to it.
+    listening: Option<Listening>,
     waits: usize,
+}
+
+impl Session {
+    /// Where `get_asides` records what the agent has read, so a listening agent doesn't get it again.
+    fn read_cursor<'a>(&'a mut self, scratch: &'a mut Cursor) -> &'a mut Cursor {
+        match &mut self.listening {
+            Some(listening) => &mut listening.cursor,
+            None => scratch,
+        }
+    }
 }
 
 struct Server {
@@ -70,16 +83,8 @@ struct Server {
 }
 
 pub fn run(dir: PathBuf, timeout: Option<u64>) -> Result<()> {
-    let last_send = AppState::read(&paths::state_path()).and_then(|s| s.agent_send).map_or(0, |s| s.at_ms);
     let server = Arc::new(Server {
-        session: Mutex::new(Session {
-            cursor: Cursor::at_end(&dir),
-            dir,
-            client: String::new(),
-            timeout,
-            last_send,
-            waits: 0,
-        }),
+        session: Mutex::new(Session { dir, client: String::new(), timeout, listening: None, waits: 0 }),
         out: Mutex::new(io::stdout()),
         running: Mutex::new(HashMap::new()),
     });
@@ -162,11 +167,15 @@ impl Server {
     fn prompt(&self, params: &Value) -> Result<Value, (i64, String)> {
         let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
         let text = match name {
-            "listen" => LISTEN_PROMPT.to_string(),
+            "listen" => {
+                let session = self.session.lock().unwrap();
+                listen_prompt(&session.client, &session.dir)
+            }
             "asides" => {
                 let mut session = self.session.lock().unwrap();
                 let dir = session.dir.clone();
-                let text = read_note(&dir, None, &mut session.cursor).map_err(|e| (-32602, e))?;
+                let mut scratch = Cursor::default();
+                let text = read_note(&dir, None, session.read_cursor(&mut scratch)).map_err(|e| (-32602, e))?;
                 format!(
                     "Work through my asides below. I recorded them while testing; they were transcribed \
                      verbatim, so expect misheard words. Treat each entry as a request from me.\n\n{text}"
@@ -185,7 +194,8 @@ impl Server {
                 let after = args.get("after_entry").and_then(Value::as_u64).map(|n| n as u32);
                 let mut session = self.session.lock().unwrap();
                 let dir = session.dir.clone();
-                let result = match read_note(&dir, after, &mut session.cursor) {
+                let mut scratch = Cursor::default();
+                let result = match read_note(&dir, after, session.read_cursor(&mut scratch)) {
                     Ok(text) => tool_text(text, false),
                     Err(err) => tool_text(err, true),
                 };
@@ -249,7 +259,12 @@ impl Server {
         }
         self.set_waiting(1);
         let limit = {
-            let session = self.session.lock().unwrap();
+            let mut session = self.session.lock().unwrap();
+            if session.listening.is_none() {
+                let delivery = Config::load(&paths::config_path()).unwrap_or_default().agent_delivery;
+                let sends = AppState::read(&paths::state_path()).map(|s| s.agent_sends).unwrap_or_default();
+                session.listening = Some(Listening::start(&dir, delivery, &sends));
+            }
             let default = match session.timeout {
                 Some(secs) => Duration::from_secs(secs),
                 None if session.client.to_ascii_lowercase().contains("claude") => CLAUDE_CODE_WAIT,
@@ -311,31 +326,36 @@ impl Server {
 
     /// What's ready for the agent now, given the delivery setting, and moves past it.
     fn take_new(&self) -> Vec<Item> {
-        let config = Config::load(&paths::config_path()).unwrap_or_default();
+        let delivery = Config::load(&paths::config_path()).unwrap_or_default().agent_delivery;
+        let sends = AppState::read(&paths::state_path()).map(|s| s.agent_sends).unwrap_or_default();
         let mut session = self.session.lock().unwrap();
-        let items = match config.agent_delivery {
-            AgentDelivery::Each => agents::collect(&session.dir, &session.cursor, None),
-            AgentDelivery::Batch => {
-                let send = AppState::read(&paths::state_path())
-                    .and_then(|s| s.agent_send)
-                    .filter(|send| send.at_ms > session.last_send && send.dir == session.dir);
-                match send {
-                    Some(send) => {
-                        session.last_send = send.at_ms;
-                        match &send.note {
-                            Some(note) => agents::collect(&session.dir, &session.cursor, Some((note, send.entry))),
-                            None => Vec::new(),
-                        }
-                    }
-                    None => Vec::new(),
-                }
-            }
-        };
-        for item in &items {
-            session.cursor.advance(item);
-        }
-        items
+        session.listening.as_mut().map_or_else(Vec::new, |l| l.take(delivery, sends.first()))
     }
+}
+
+/// The listen prompt. Claude Code can watch `asides listen` with its Monitor tool and stay free in
+/// between; other agents wait in a tool call.
+fn listen_prompt(client: &str, dir: &Path) -> String {
+    let wait = "call the wait_for_asides tool; whenever it returns asides, list them for me in one short line \
+                each (#N and a few words, since I can't see tool results), act on each one, then call \
+                wait_for_asides again. If it returns none, call it again straight away.";
+    let mut text = "Listen to my asides: things I say while I test, transcribed on my Mac. Each one is a request \
+                    from me."
+        .to_string();
+    if client.to_ascii_lowercase().contains("claude") {
+        let command = crate::listen::command(dir, Some(LISTEN_SECS), None);
+        text.push_str(&format!(
+            "\n\nStart a background monitor (the Monitor tool) with the description \"asides\" and timeout_ms \
+             1800000 that runs:\n\n{command}\n\nEach event is an aside or a batch of them, which I see in the chat \
+             too: act on it, no need to repeat it. Between asides, you're free: I may ask you other things. When the monitor's \
+             last event says it stopped, start a new monitor with the command it gives, to keep listening. If you \
+             don't have the Monitor tool, {wait}"
+        ));
+    } else {
+        text.push_str(&format!("\n\nTo listen, {wait}"));
+    }
+    text.push_str("\n\nKeep listening until I tell you to stop.");
+    text
 }
 
 /// Binds the app to `dir` unless it's already bound there. `Ok(true)` when it bound it.
@@ -351,7 +371,7 @@ fn bind_here(dir: &Path) -> Result<bool> {
 }
 
 /// Why the user's recordings wouldn't reach this repo, if they wouldn't.
-fn binding_problem(dir: &Path) -> Option<String> {
+pub(crate) fn binding_problem(dir: &Path) -> Option<String> {
     let Some(state) = crate::running_state() else {
         return Some("Asides isn't running, so nothing can be recorded yet.".into());
     };
@@ -385,6 +405,19 @@ fn app_notices(dir: &Path) -> Vec<String> {
 
 /// The tool result for new asides: their text, grouped by note, then the screenshots they show.
 fn delivery(items: &[Item]) -> Value {
+    let (mut text, images) = asides_text(items);
+    text.push_str(
+        "\n\nThe user can't see this result: first list these asides for them, one short line each (#N and a few \
+         words), then act on them. When you've handled them, call wait_for_asides again to keep listening.",
+    );
+    let mut content = vec![json!({ "type": "text", "text": text })];
+    content.extend(images.iter().filter_map(|path| inline_image(path)).take(MAX_INLINE_IMAGES));
+    json!({ "content": content, "isError": false })
+}
+
+/// New asides as an agent reads them: what they are, then their text grouped by note, with
+/// absolute links. Also returns the screenshots they show.
+pub(crate) fn asides_text(items: &[Item]) -> (String, Vec<PathBuf>) {
     let count = items.iter().filter(|i| matches!(i, Item::Entry { .. })).count();
     let mut text = match count {
         0 => "The user added to asides you already have.".to_string(),
@@ -410,10 +443,7 @@ fn delivery(items: &[Item]) -> Value {
         text.push_str(&format!("\n\n## {heading}\n\n{}", agents::absolute_links(&note.dir, body.trim())));
         images.extend(agents::image_paths(&note.dir, body));
     }
-    text.push_str("\n\nWhen you've handled them, call wait_for_asides again to keep listening.");
-    let mut content = vec![json!({ "type": "text", "text": text })];
-    content.extend(images.iter().filter_map(|path| inline_image(path)).take(MAX_INLINE_IMAGES));
-    json!({ "content": content, "isError": false })
+    (text, images)
 }
 
 /// The latest note with absolute links, or only its entries after `after`; moves `cursor` past them.

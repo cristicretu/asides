@@ -1,4 +1,4 @@
-//! Small AppKit/AVFoundation helpers: sounds, microphone permission, Finder.
+//! Small AppKit/AVFoundation helpers: sounds, microphone permission, Finder, the command link.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -86,6 +86,40 @@ pub fn open_in_text_editor(path: &Path) {
 
 pub fn reveal(path: &Path) {
     let _ = Command::new("open").arg("-R").arg(path).spawn();
+}
+
+/// How putting the `asides` command on the PATH went.
+pub enum CommandLink {
+    Linked,
+    /// The user cancelled the administrator prompt.
+    Declined,
+    Failed(String),
+}
+
+/// Links `cli` as `asides_core::install::LINK`. /usr/local/bin usually belongs to root, so unless the
+/// user can write to it, macOS asks for an administrator's password. Blocks while the prompt shows.
+pub fn link_command(cli: &Path) -> CommandLink {
+    let link = Path::new(asides_core::install::LINK);
+    let direct = link.parent().is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+        && std::os::unix::fs::symlink(cli, link).is_ok();
+    if direct {
+        return CommandLink::Linked;
+    }
+    let script = format!(
+        "on run argv\n\
+         do shell script \"/bin/mkdir -p /usr/local/bin && /bin/ln -sfn \" & quoted form of (item 1 of argv) & \" {}\" \
+         with prompt \"Asides wants to add the asides command to /usr/local/bin, so you can run it in any terminal.\" \
+         with administrator privileges\n\
+         end run",
+        link.display()
+    );
+    match Command::new("/usr/bin/osascript").arg("-e").arg(script).arg(cli).output() {
+        Ok(out) if out.status.success() => CommandLink::Linked,
+        // errAEEventUserCanceled
+        Ok(out) if String::from_utf8_lossy(&out.stderr).contains("-128") => CommandLink::Declined,
+        Ok(out) => CommandLink::Failed(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+        Err(err) => CommandLink::Failed(err.to_string()),
+    }
 }
 
 pub fn open_microphone_settings() {

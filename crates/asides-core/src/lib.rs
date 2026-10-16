@@ -3,6 +3,7 @@
 pub mod agents;
 pub mod config;
 pub mod frontmatter;
+pub mod install;
 pub mod link;
 pub mod markdown;
 pub mod models;

@@ -1,3 +1,4 @@
+mod listen;
 mod mcp;
 
 use std::path::{Path, PathBuf};
@@ -56,6 +57,18 @@ enum Command {
         #[arg(long, value_name = "SECONDS")]
         timeout: Option<u64>,
     },
+    /// Print your asides as they arrive, for an agent watching this command in the background.
+    ///
+    /// Claude Code runs it with its Monitor tool when you ask it to listen to your asides, so each
+    /// aside shows up in the chat while the agent stays free in between. Runs until stopped.
+    Listen {
+        /// Stop after this many seconds, printing the command that carries on from there.
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u64>,
+        /// Carry on from where an earlier `asides listen` stopped (the token it printed).
+        #[arg(long, value_name = "TOKEN")]
+        after: Option<String>,
+    },
     /// Development: process a WAV file as if it had just been recorded.
     #[command(hide = true)]
     Simulate {
@@ -110,6 +123,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Some(Command::Send) => send_batch(),
         Some(Command::Mcp { timeout }) => mcp::run(dir()?, timeout),
+        Some(Command::Listen { timeout, after }) => listen::run(dir()?, timeout, after),
         Some(Command::Simulate { wav, new, image, at }) => {
             let request = request_id();
             let wav = wav.canonicalize().context("WAV file not found")?;
@@ -166,15 +180,20 @@ fn send_batch() -> Result<()> {
     if running_state().is_none() {
         bail!("Asides is not running. Run `asides` in a repo to start it.");
     }
+    let last_send = |state: &AppState| state.agent_sends.first().map(|s| s.at_ms);
+    let sent_before = AppState::read(&paths::state_path()).and_then(|s| last_send(&s));
     let request = request_id();
     send(&Link::Send { request: Some(request.clone()) })?;
     let state = wait_for_ack(&request)?;
-    if Config::load(&paths::config_path()).unwrap_or_default().agent_delivery == AgentDelivery::Each {
+    let sent = last_send(&state) != sent_before;
+    if sent && Config::load(&paths::config_path()).unwrap_or_default().agent_delivery == AgentDelivery::Each {
         println!("Sent. (Agents already get each aside as it's transcribed: agent_delivery is \"each\".)");
+    } else if sent {
+        println!("Sent to the agents listening in {}.", state.bound_dir.as_deref().map(tilde).unwrap_or_default());
     } else if state.status == "recording" || state.status == "transcribing" {
         println!("Sending once the last recording is transcribed.");
     } else {
-        println!("Sent to the agents listening in {}.", state.bound_dir.as_deref().map(tilde).unwrap_or_default());
+        bail!("{}", state.detail.unwrap_or_else(|| "nothing was sent".into()));
     }
     Ok(())
 }

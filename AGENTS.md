@@ -31,6 +31,7 @@ It's a Rust workspace:
 | Install | `make install` |
 | Test fixtures | `make fixtures` (needs the macOS voice "Ioana") |
 | Share image | `python3 scripts/make-og.py` (renders `docs/og.png` from the demo; needs Firefox) |
+| App icon | `swift scripts/make-icon.swift` (writes `packaging/Asides.icns`) |
 | Notarized release | `make release` (only when the maintainer asks; see Rules) |
 
 Run format, lint and unit tests after every change. Run `make e2e` when CLI or app behavior
@@ -80,6 +81,7 @@ changes.
 - read `~/Library/Application Support/Asides/state.json`
 - drive `asides mcp` with JSON-RPC on stdin (see CONTRIBUTING.md), and run Claude Code, Codex or
   OpenCode against it with a one-off MCP config, using `asides simulate` for speech
+- run `asides listen --timeout N` and read what it prints
 - render the website with headless Firefox (`--screenshot`) to check layouts at phone width
 
 **You can't:**
@@ -136,6 +138,9 @@ The user may record a request and ask you to "implement the note". Find it with
 - Codex asks for approval before each call to an MCP tool not marked `readOnlyHint` (and fails
   it under `approval: never`), so a listening loop needs read-only tools. That's why binding is a
   separate tool, `bind_asides`.
+- Claude Code's Monitor tool kills a command after at most 30 min, so the listen prompt runs
+  `asides listen --timeout 1740`, which prints the command to carry on (with an `--after` token)
+  before that happens. Monitor events aren't replies from the user; the prompt says asides are.
 - Claude Code probes `server/discover` (a newer MCP revision) before `initialize`. Answering
   "method not found" makes it fall back to `initialize`.
 - Wispr Flow's `flow.sqlite` schema changes often between its versions. Discover columns, don't

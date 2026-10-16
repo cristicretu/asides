@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::AgentDelivery;
 use crate::notes::{self, Entry, Note};
+use crate::state::AgentSend;
 
 /// How far an agent has read: entry `entry` of `note` (a note folder), of which the first `len`
 /// bytes of the body. `note: None` means before the first note.
@@ -39,6 +41,19 @@ impl Cursor {
         }
     }
 
+    /// Before the first entry of `base`'s latest note.
+    pub fn at_start(base: &Path) -> Cursor {
+        Cursor { note: notes::latest_note(base).map(|n| n.dir), ..Cursor::default() }
+    }
+
+    /// Just after entry `number` of the note in `note_dir`, as it is now.
+    pub fn after_entry(note_dir: &Path, number: u32) -> Cursor {
+        let file = note_dir.join(crate::paths::NOTE_FILE);
+        let entries = fs::read_to_string(file).map(|c| notes::parse_entries(&c)).unwrap_or_default();
+        let len = entries.iter().find(|e| e.number == number).map_or(0, |e| e.body.len());
+        Cursor { note: Some(note_dir.to_path_buf()), entry: number, len }
+    }
+
     /// Moves past `item`.
     pub fn advance(&mut self, item: &Item) {
         match item {
@@ -47,6 +62,74 @@ impl Cursor {
             }
             Item::Addition { text, .. } => self.len += text.len(),
         }
+    }
+}
+
+/// One agent listening in `dir`: what it has been given, and the last Send to Agent it acted on.
+/// `asides mcp` and `asides listen` both deliver through it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listening {
+    pub dir: PathBuf,
+    pub cursor: Cursor,
+    /// Sends up to this one (`AgentSend::at_ms`) aren't for this agent: they came before it
+    /// started listening, or it already has them.
+    pub last_send: u64,
+}
+
+impl Listening {
+    /// Starts listening in `dir` now, given the last Send to Agent in each directory (newest
+    /// first). Sends made earlier are ignored: the user chose them before the agent listened. What
+    /// they would have carried isn't lost, though: in batch mode the next send includes everything
+    /// since the last send in `dir` (or, without one, the latest note). In each mode, only asides
+    /// recorded from now on are new.
+    pub fn start(dir: &Path, delivery: AgentDelivery, sends: &[AgentSend]) -> Listening {
+        let cursor = match delivery {
+            AgentDelivery::Each => Cursor::at_end(dir),
+            AgentDelivery::Batch => match sends.iter().find(|s| s.dir == dir) {
+                Some(AgentSend { note: Some(note), entry, .. }) => Cursor::after_entry(note, *entry),
+                _ => Cursor::at_start(dir),
+            },
+        };
+        Listening { dir: dir.to_path_buf(), cursor, last_send: sends.first().map_or(0, |s| s.at_ms) }
+    }
+
+    /// What's ready for the agent now, and moves past it: in each mode, everything new; in batch
+    /// mode, the entries up to a Send to Agent made since the last one it acted on.
+    pub fn take(&mut self, delivery: AgentDelivery, send: Option<&AgentSend>) -> Vec<Item> {
+        let items = match delivery {
+            AgentDelivery::Each => collect(&self.dir, &self.cursor, None),
+            AgentDelivery::Batch => match send.filter(|s| s.at_ms > self.last_send && s.dir == self.dir) {
+                Some(send) => {
+                    self.last_send = send.at_ms;
+                    match &send.note {
+                        Some(note) => collect(&self.dir, &self.cursor, Some((note, send.entry))),
+                        None => Vec::new(),
+                    }
+                }
+                None => Vec::new(),
+            },
+        };
+        for item in &items {
+            self.cursor.advance(item);
+        }
+        items
+    }
+
+    /// Where this agent is, as text, to carry on later with `resume` (`asides listen --after`).
+    pub fn token(&self) -> String {
+        let note = self.cursor.note.as_ref().and_then(|n| n.file_name()).map(|n| n.to_string_lossy().into_owned());
+        format!("{}:{}:{}:{}", self.last_send, self.cursor.entry, self.cursor.len, note.unwrap_or_default())
+    }
+
+    /// Listening in `dir` from where `token` left off; `None` if it isn't a token.
+    pub fn resume(dir: &Path, token: &str) -> Option<Listening> {
+        let mut parts = token.splitn(4, ':');
+        let last_send = parts.next()?.parse().ok()?;
+        let entry = parts.next()?.parse().ok()?;
+        let len = parts.next()?.parse().ok()?;
+        let note = parts.next()?;
+        let note = (!note.is_empty()).then(|| notes::notes_root(dir).join(note));
+        Some(Listening { dir: dir.to_path_buf(), cursor: Cursor { note, entry, len }, last_send })
     }
 }
 
@@ -242,6 +325,57 @@ mod tests {
         assert_eq!(numbers(&collect(tmp.path(), &cursor, Some((&a.dir, 1)))), ["A #1"]);
         assert_eq!(numbers(&collect(tmp.path(), &cursor, Some((&a.dir, 2)))), ["A #1", "A #2"]);
         assert_eq!(numbers(&collect(tmp.path(), &cursor, Some((&b.dir, 1)))), ["A #1", "A #2", "B #1"]);
+    }
+
+    fn send(at_ms: u64, dir: &Path, note: &Note, entry: u32) -> AgentSend {
+        AgentSend { at_ms, dir: dir.to_path_buf(), note: Some(note.dir.clone()), entry }
+    }
+
+    #[test]
+    fn a_send_made_before_listening_is_not_delivered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = note(tmp.path(), 30, "A");
+        a.append("## 1 · 14:30\n\nOne.").unwrap();
+        a.append("## 2 · 14:31\n\nTwo.").unwrap();
+        let early = send(100, tmp.path(), &a, 2);
+        let mut listening = Listening::start(tmp.path(), AgentDelivery::Batch, std::slice::from_ref(&early));
+        assert!(listening.take(AgentDelivery::Batch, Some(&early)).is_empty());
+        // Without an earlier send here, the next one carries the latest note so far, even when the
+        // newest send was made elsewhere.
+        let elsewhere = AgentSend { at_ms: 50, dir: "/elsewhere".into(), ..early.clone() };
+        let mut fresh = Listening::start(tmp.path(), AgentDelivery::Batch, std::slice::from_ref(&elsewhere));
+        assert_eq!(numbers(&fresh.take(AgentDelivery::Batch, Some(&early))), ["A #1", "A #2"]);
+        // With one here, after it, even when a send elsewhere is newer.
+        a.append("## 3 · 14:32\n\nThree.").unwrap();
+        let newer_elsewhere = AgentSend { at_ms: 150, ..elsewhere.clone() };
+        let mut back = Listening::start(tmp.path(), AgentDelivery::Batch, &[newer_elsewhere, early.clone()]);
+        assert_eq!(numbers(&back.take(AgentDelivery::Batch, Some(&send(160, tmp.path(), &a, 3)))), ["A #3"]);
+
+        let later = send(200, tmp.path(), &a, 3);
+        assert_eq!(numbers(&listening.take(AgentDelivery::Batch, Some(&later))), ["A #3"]);
+        assert!(listening.take(AgentDelivery::Batch, Some(&later)).is_empty());
+        // A send for another directory isn't for this agent.
+        let elsewhere = AgentSend { at_ms: 300, ..elsewhere };
+        assert!(listening.take(AgentDelivery::Batch, Some(&elsewhere)).is_empty());
+    }
+
+    #[test]
+    fn each_mode_starts_at_the_end_and_resumes_from_a_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = note(tmp.path(), 30, "A");
+        a.append("## 1 · 14:30\n\nBefore.").unwrap();
+        let mut listening = Listening::start(tmp.path(), AgentDelivery::Each, &[]);
+        assert!(listening.take(AgentDelivery::Each, None).is_empty());
+        a.append("## 2 · 14:31\n\nAfter.").unwrap();
+        assert_eq!(numbers(&listening.take(AgentDelivery::Each, None)), ["A #2"]);
+
+        a.append("## 3 · 14:32\n\nWhile away.").unwrap();
+        let resumed = Listening::resume(tmp.path(), &listening.token()).unwrap();
+        assert_eq!(resumed, listening);
+        assert_eq!(numbers(&listening.take(AgentDelivery::Each, None)), ["A #3"]);
+        let empty = Listening::resume(tmp.path(), &Listening::start(tmp.path(), AgentDelivery::Batch, &[]).token());
+        assert!(empty.is_some());
+        assert_eq!(Listening::resume(tmp.path(), "nonsense"), None);
     }
 
     #[test]

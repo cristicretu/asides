@@ -62,11 +62,13 @@ your settings and the speech model.
 
 Download the [disk image](https://asides.mihaicristianfarcas.workers.dev/Asides.dmg) (or
 `Asides-<version>.zip` from the [Releases page](https://github.com/mihaicristianfarcas/asides/releases)),
-drag `Asides.app` to `/Applications`, and link the command that ships inside it:
+drag `Asides.app` to `/Applications`, and open it. The first time, it links the `asides` command
+that ships inside it into `/usr/local/bin`, which is on every shell's `PATH`. If that folder
+belongs to the system, as it usually does on Apple silicon, macOS asks for your password. Cancel,
+and Asides doesn't ask again; you can then link it yourself:
 
 ```bash
-mkdir -p ~/.local/bin
-ln -s /Applications/Asides.app/Contents/Helpers/asides ~/.local/bin/asides
+sudo ln -s /Applications/Asides.app/Contents/Helpers/asides /usr/local/bin/asides
 ```
 
 ### From source
@@ -76,8 +78,7 @@ git clone https://github.com/mihaicristianfarcas/asides && cd asides
 make install   # Asides.app → ~/Applications, plus a link to its CLI in ~/.local/bin
 ```
 
-With the download or a source build, make sure `~/.local/bin` is on your `PATH`. On first
-launch, Asides asks for microphone access and downloads the speech model (574 MB,
+With a source build, make sure `~/.local/bin` is on your `PATH`. On first launch, Asides asks for microphone access and downloads the speech model (574 MB,
 checksum-verified) to `~/Library/Application Support/Asides/models/`.
 
 `make install` signs both binaries with the hardened runtime, using the best identity in your
@@ -87,8 +88,8 @@ Without one, the app is signed ad hoc: macOS treats every rebuild as a new app a
 microphone again. If you don't have an Apple certificate, run `make cert` once. It creates the
 self-signed identity in your login keychain and asks for your password.
 
-`make uninstall` removes the app and the command. Settings and models stay in
-`~/Library/Application Support/Asides`.
+`make uninstall` removes the app and the command; for a download, delete `Asides.app` and
+`/usr/local/bin/asides`. Settings and models stay in `~/Library/Application Support/Asides`.
 
 ## Use
 
@@ -104,6 +105,7 @@ self-signed identity in your login keychain and asks for your password.
 | `asides export [--out FILE]` | Zip the latest note (text, screenshots, audio) to share it. |
 | `asides send` | Send to Agent: hand what you've recorded to agents listening in batch mode. |
 | `asides mcp` | The MCP server for coding agents. Agents start it themselves; see [Coding agents](#coding-agents). |
+| `asides listen` | Print your asides as they reach agents. Claude Code runs it in the background while it listens. |
 | `asides quit` | Quit the app, after it finishes any queued transcriptions. |
 
 `-C <dir>` runs any command as if it were started in `<dir>`.
@@ -118,7 +120,8 @@ self-signed identity in your login keychain and asks for your password.
 | `Esc` | Cancel the recording; nothing is written. Only captured while recording. |
 | `⌃⌥Enter` | Send to Agent. Only registered while agents get asides in batches. |
 
-Images you copy while recording are attached automatically.
+Images you copy while recording are attached automatically. You can change any shortcut in
+**Preferences → Edit Shortcuts & Settings** (see [Settings](#settings)).
 
 ### The menu
 
@@ -188,27 +191,45 @@ opencode mcp add --global asides -- asides mcp        # OpenCode
 ```
 
 Then, in a session in your repo, ask the agent to **listen to your asides** (in Claude Code,
-`/asides:listen` says the same). It waits for your next recording, acts on it as a prompt,
-and waits again, until you stop it. If Asides is bound to another repo, or not running, the agent
-binds it to its own (it may ask you to allow that once).
+`/asides:listen` says the same). It acts on each aside as a prompt, until you tell it to stop. If
+Asides is bound to another repo, or not running, the agent binds it to its own (it may ask you to
+allow that once).
+
+How the agent listens depends on what it can do:
+
+- **Claude Code** runs `asides listen` in the background, with its Monitor tool. Each aside shows
+  up in the chat as it reaches the agent, and the agent acts on it. In between, the agent is free:
+  you can ask it other things.
+- **Codex, OpenCode and others** wait in a tool call (`wait_for_asides`), act on what it returns,
+  then wait again. Asides that arrive while the agent works wait for it. Most agents hide tool
+  results, so the agent first lists the asides it got, one line each.
 
 How asides reach the agent is a preference (**Preferences → Agents Get Asides**, or
 `agent_delivery`):
 
-- **Each aside as it's transcribed** (`each`, the default): every recording becomes a prompt a few
-  seconds after you stop talking.
+- **Each aside as it's transcribed** (`each`, the default): every recording made after the agent
+  starts listening becomes a prompt a few seconds after you stop talking.
 - **In batches** (`batch`): recordings wait until you choose **Send to Agent** (`⌃⌥Enter`, the menu,
-  or `asides send`). A recording in progress is stopped and included.
+  or `asides send`). A batch holds everything recorded since the last one, including recordings
+  made before the agent started listening. A recording in progress is stopped and included.
 
-The agent gets the transcript, the note's path and your screenshots, both as images and as file
-paths. It can also read the whole latest note on request ("work through my asides", or
-`/asides:asides` in Claude Code).
+The menu shows where things stand. Its status line says `Claude Code listening` while the agent
+waits for asides, and `Claude Code working on your asides` while it acts on them. Send to Agent
+shows **Sent** when an agent is waiting, and **Queued** when it's busy: it gets the batch when it's
+done. With no agent listening, nothing is sent; the menu says so, and the batch waits for your next
+Send to Agent.
+
+The agent gets the transcript, the note's path and your screenshots (as images through
+`wait_for_asides`, as file paths through both). It can also read the whole latest note on request
+("work through my asides", or `/asides:asides` in Claude Code).
 
 Agents give up on a tool call after a while: Codex and most others after 60 s, Claude Code much
 later. So the agent's wait ends after 50 s (25 min in Claude Code), and the agent calls again. To
 wait longer in Codex, raise its `tool_timeout_sec` for the server and pass the same wait to asides:
 `codex mcp add asides -- asides mcp --timeout 3000`, then set `tool_timeout_sec = 3600` under
-`[mcp_servers.asides]` in `~/.codex/config.toml`.
+`[mcp_servers.asides]` in `~/.codex/config.toml`. Claude Code's monitors last at most 30 minutes,
+so `asides listen` stops after 29 and prints the command that carries on where it stopped; the
+agent runs it, and nothing recorded in between is lost.
 
 ## Wispr Flow
 
@@ -273,6 +294,8 @@ more reliable; a single entry skips detection altogether.
 - **Wispr Flow** transcribes with its own service, under its own terms. Asides only reads the
   history Wispr Flow keeps on your Mac, and only when you turn the integration on.
 - **Microphone** access is required.
+- **Administrator password:** asked once, if you installed Asides by hand and `/usr/local/bin`
+  belongs to the system, to link the `asides` command there. Cancel to skip it.
 - **Clipboard:** macOS may ask once whether Asides may paste from other apps, when it reads a
   screenshot from the clipboard. Choose Allow.
 - **No other permissions:** Accessibility, Input Monitoring and Screen Recording are not needed.
@@ -290,8 +313,10 @@ more reliable; a single entry skips detection altogether.
 - **Esc doesn't reach other apps while recording.** That's intentional: Esc cancels the recording.
   It's released again as soon as you stop.
 - **The agent doesn't get my asides.** Check the status line in the menu: it says which agent is
-  listening. If none is, ask the agent to listen to your asides. In batch mode, choose Send to Agent.
-  If the agent works in another repo than the one Asides is bound to, recordings go to the bound one.
+  listening, or working on your last asides. If none is, ask the agent to listen to your asides. In
+  batch mode, choose Send to Agent; it says whether the batch was sent, queued, or had no agent to
+  go to. If the agent works in another repo than the one Asides is bound to, recordings go to the
+  bound one.
 - **Wispr Flow dictations don't show up.** Check that Wispr Flow keeps history on this Mac, and that
   the app you dictate in matches `wispr_flow_apps`.
 

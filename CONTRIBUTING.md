@@ -76,7 +76,7 @@ deleted.
 |---|---|---|
 | Unit | `make test` | notes, metadata, Markdown, git info, links, state, config, resampling, language choice, icon rendering |
 | Speech | `make test-speech` | transcription of the fixtures (needs the model) and a real model download with checksum check (190 MB) |
-| End-to-end | `make e2e` | installs a build with the `dev-hooks` feature, then drives it through the `asides` command in a throwaway git repo, feeding WAV files instead of the microphone (`asides simulate`), a database of its own instead of Wispr Flow's history, and `scripts/e2e-mcp.py` as a coding agent (each and batch delivery, Send to Agent, cancelling). It restores your `config.toml` afterwards |
+| End-to-end | `make e2e` | installs a build with the `dev-hooks` feature, then drives it through the `asides` command in a throwaway git repo, feeding WAV files instead of the microphone (`asides simulate`), a database of its own instead of Wispr Flow's history, and `scripts/e2e-mcp.py` as a coding agent (each and batch delivery, Send to Agent, cancelling, `asides listen`, sending with no agent listening). It restores your `config.toml` afterwards |
 | Manual | checklist below | everything a script can't do: the microphone, shortcuts, menus and permissions |
 
 To look at the menu-bar icons without installing, render them to files:
@@ -113,10 +113,15 @@ in your pull request what you tried.
   - the bound directory deleted while the app runs
 - [ ] **CLI:** closing the terminal after `asides` leaves the app running; `asides quit`
   finishes queued transcriptions first.
-- [ ] **Agents:** with an agent listening, the status line names it; a recording reaches it a few
-  seconds after you stop. In batch mode, `⌃⌥Enter` and Send to Agent in the menu deliver everything
-  recorded so far, including a recording still in progress; in each mode the item is disabled and
-  `⌃⌥Enter` stays free for other apps.
+- [ ] **Agents:** with an agent listening, the status line names it (`listening`, or `working on
+  your asides` while it acts); a recording reaches it a few seconds after you stop. In Claude Code,
+  `/asides:listen` starts a monitor and each aside shows in the chat. In batch mode, `⌃⌥Enter` and
+  Send to Agent in the menu deliver everything recorded since the last send, including a recording
+  still in progress, and the menu bar shows Sent or Queued; with no agent listening, it says so and
+  sends nothing. In each mode the item is disabled and `⌃⌥Enter` stays free for other apps.
+- [ ] **Installed by hand:** with no `asides` command anywhere, opening `/Applications/Asides.app`
+  links `/usr/local/bin/asides` (asking for a password if root owns the folder); after Cancel it
+  isn't asked again. The app icon shows in Spotlight and Finder.
 - [ ] **Wispr Flow:** with Add Wispr Flow Dictations on, a dictation lands in the note marked
   `· Wispr Flow`; with it off, nothing does.
 
@@ -145,6 +150,8 @@ in your pull request what you tried.
   and in what content they accept.
 - **A model:** add it to `MODELS` in `models.rs` with the exact size and SHA-256 from the Hugging
   Face file listing. All models must be multilingual.
+- **The app icon:** edit `scripts/make-icon.swift` and run it (`swift scripts/make-icon.swift`). It
+  writes `packaging/Asides.icns`, which `make bundle` copies into the app.
 - **The note format:** change `markdown.rs` or `frontmatter.rs` along with their tests, then the
   e2e expectations and the README example. Keep the format append-only (see the invariants in
   ARCHITECTURE.md).
@@ -201,8 +208,8 @@ certificate in your keychain.
 `docs/` is the landing page, served by GitHub Pages from the `docs/` folder on `main`. It's one
 static `index.html` with inline CSS and JavaScript and no build step: open it in a browser to
 preview it (`python3 -m http.server -d docs` serves it at http://localhost:8000). The demo is a Mac
-desktop drawn on a 1024 × 640 grid that scales with the page; on phones it shows a zoomed, square
-part of it that follows the action. What the tester says shows as subtitles inside the picture. It
+desktop drawn on a 1024 × 640 grid that scales with the page, phones included, like a picture. What
+the tester says shows as subtitles inside the picture. It
 plays in a loop while it's on screen (once, with reduced motion). `wallpaper.webp` is its
 background. `og.png` is the 1200×630 image shown when the link is shared: the demo frozen
 mid-recording. After changing the demo, regenerate it with `python3 scripts/make-og.py` (it needs
