@@ -60,7 +60,7 @@ your settings and the speech model.
 
 ### Download
 
-Download the [disk image](https://asides.mihaicristianfarcas.workers.dev/Asides.dmg) (or
+Download the [disk image](https://download.asides.mihaicristian.dev/Asides.dmg) (or
 `Asides-<version>.zip` from the [Releases page](https://github.com/mihaicristianfarcas/asides/releases)),
 drag `Asides.app` to `/Applications`, and open it. The first time, it links the `asides` command
 that ships inside it into `/usr/local/bin`, which is on every shell's `PATH`. If that folder

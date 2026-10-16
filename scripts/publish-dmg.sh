@@ -1,6 +1,6 @@
 #!/bin/bash
 # Publishes dist/Asides-<version>.dmg (from `make release`) behind the website's download button:
-# a Cloudflare Worker that only serves static files, at https://asides.<subdomain>.workers.dev.
+# a Cloudflare Worker that only serves static files, at https://download.asides.mihaicristian.dev.
 # Needs Wrangler, logged in to the Cloudflare account that owns the Worker (`wrangler login`).
 set -euo pipefail
 cd "$(dirname "$0")/.."

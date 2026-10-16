@@ -77,10 +77,11 @@ packaging/Info.plist  bundle ID, LSUIElement, NSMicrophoneUsageDescription, URL 
 packaging/Asides.icns the app icon, drawn by scripts/make-icon.swift
 packaging/Asides.entitlements   microphone entitlement (required by the hardened runtime)
 packaging/download/   the Cloudflare Worker that serves the website's disk image (static files only)
+packaging/site/       the Cloudflare Worker that serves the website, docs/ (static files only)
 scripts/              e2e.sh (+ e2e-mcp.py, a scripted agent), make-fixtures.sh, signing-identity.sh,
                       make-signing-cert.sh, release.sh, make-dmg.sh, publish-dmg.sh, make-og.py,
                       make-icon.swift
-docs/                 the website (GitHub Pages): index.html, wallpaper.webp, favicon.svg, og.png
+docs/                 the website (asides.mihaicristian.dev): index.html, wallpaper.webp, favicon.svg, og.png
 Casks/asides.rb       the Homebrew cask; the repository doubles as a tap
 ```
 

@@ -1,9 +1,11 @@
-// The website's download: a Cloudflare Worker that only serves static files, no code.
-// scripts/publish-dmg.sh copies the disk image and _redirects into dist/download, then deploys.
+// The website's download, download.asides.mihaicristian.dev: a Cloudflare Worker that only serves
+// static files, no code. scripts/publish-dmg.sh copies the disk image and _redirects into
+// dist/download, then deploys.
 {
-  "name": "asides",
+  "name": "asides-download",
   "compatibility_date": "2026-10-01",
   "assets": { "directory": "../../dist/download" },
-  "workers_dev": true,
+  "routes": [{ "pattern": "download.asides.mihaicristian.dev", "custom_domain": true }],
+  "workers_dev": false,
   "preview_urls": false
 }

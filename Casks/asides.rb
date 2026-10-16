@@ -7,7 +7,7 @@ cask "asides" do
   url "https://github.com/mihaicristianfarcas/asides/releases/download/v#{version}/Asides-#{version}.zip"
   name "Asides"
   desc "Records spoken bug reports and transcribes them locally into Markdown notes"
-  homepage "https://mihaicristianfarcas.github.io/asides/"
+  homepage "https://asides.mihaicristian.dev/"
 
   livecheck do
     url :url

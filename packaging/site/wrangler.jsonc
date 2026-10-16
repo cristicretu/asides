@@ -1,0 +1,10 @@
+// The website, asides.mihaicristian.dev: a Cloudflare Worker that only serves docs/ as static
+// files, no code. `make publish-site` deploys it.
+{
+  "name": "asides-site",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "../../docs" },
+  "routes": [{ "pattern": "asides.mihaicristian.dev", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": false
+}
