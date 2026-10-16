@@ -22,6 +22,15 @@ cleanup() {
     rm -rf "$WORK"
 }
 trap cleanup EXIT
+# Sets a top-level setting, replacing the line (or array) the user's config.toml may already have.
+set_config() {
+    /usr/bin/python3 -I -c 'import re, sys; path, key, value = sys.argv[1:]
+try: text = open(path).read()
+except FileNotFoundError: text = ""
+text = re.sub(rf"(?m)^{key} = (\[[^\]]*\]|.*)\n", "", text)
+open(path, "w").write(f"{key} = {value}\n" + text)' "$CONFIG" "$1" "$2"
+}
+set_config agent_delivery '"each"'
 
 pass() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 fail() { printf '  \033[31m✗\033[0m %s\n' "$1"; exit 1; }
@@ -103,13 +112,13 @@ dictate() { # id, app, text
 dictate e2e-1 com.apple.Safari "The coupon field accepts expired codes."
 wait_for "$NOTE2" "The coupon field accepts expired codes."
 check "a dictation becomes an entry, marked as Wispr Flow" grep -q '^## 2 · [0-9:]* · Wispr Flow$' "$NOTE2"
-printf 'wispr_flow_apps = ["Safari"]\n' | cat - "$CONFIG" > "$WORK/config.toml" && cp "$WORK/config.toml" "$CONFIG"
+set_config wispr_flow_apps '["Safari"]'
 sleep 3
 dictate e2e-3 com.tinyspeck.slackmacgap "Not about the app either."
 dictate e2e-4 com.apple.Safari "The total is off by a cent."
 wait_for "$NOTE2" "The total is off by a cent."
 check "wispr_flow_apps leaves out other apps" test -z "$(grep -e "Not about the app" "$NOTE2")"
-cp "$WORK/config.toml.saved" "$CONFIG" 2>/dev/null || rm -f "$CONFIG"
+set_config wispr_flow_apps '[]'
 
 echo "Status, export, git hygiene"
 check "status shows the binding" grep -q "bound to .*/shop" <<<"$("$CLI" status)"

@@ -145,7 +145,7 @@ check("nothing is delivered twice",
 
 # Batches: held until Send to Agent.
 with open(config_path) as f:
-    config = f.read()
+    config = re.sub(r"(?m)^agent_delivery = .*\n", "", f.read())
 with open(config_path, "w") as f:
     f.write('agent_delivery = "batch"\n' + config)
 simulate("ro_bug.wav")
