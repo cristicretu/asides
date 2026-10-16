@@ -96,12 +96,11 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
 .button svg { width: 16px; height: 16px; }
 .button:active { transform: scale(0.97); }
 /* As tall as the button beside it, so it's as easy to tap and lines up when they wrap. */
-.more { display: inline-flex; align-items: center; gap: 0.3em; min-height: 48px; font-weight: 500; text-decoration: none; }
+.more { display: inline-flex; align-items: center; min-height: 48px; font-weight: 500; text-decoration: none; }
 
 /* Demo: a Mac screen drawn on a 1024 × 640 grid. --u is one unit of that grid, so the whole
-   desktop scales with the page. Its text is part of the picture and scales with it. On phones
-   the screen shows a square part of the desktop at --zoom, centred on --fx, --fy (set by the demo
-   as it goes) and kept within the screen's edges. */
+   desktop scales with the page, phones included. Its text is part of the picture and scales with
+   it; the subtitles don't. */
 .demo { padding-top: var(--hero-gap); }
 .device {
   margin: 0;
@@ -111,20 +110,11 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
   box-shadow: 0 0 0 1px #2c2c2e inset, 0 32px 64px -28px rgba(0, 0, 0, 0.45);
 }
 .display { position: relative; container-type: inline-size; aspect-ratio: 1024 / 640; border-radius: 12px; overflow: hidden; }
-.desk, .hud { --zoom: 1; --view-h: 640; --u: calc(100cqw * var(--zoom) / 1024); }
+.desk, .hud { --u: calc(100cqw / 1024); }
 .desk {
-  --fx: 610;
-  --fy: 330;
-  --ox: clamp(0, calc(var(--fx) - 512 / var(--zoom)), calc(1024 - 1024 / var(--zoom)));
-  --oy: clamp(0, calc(var(--fy) - var(--view-h) / 2), calc(640 - var(--view-h)));
   position: absolute;
-  top: 0;
-  left: 0;
-  width: calc(1024 * var(--u));
-  height: calc(640 * var(--u));
+  inset: 0;
   overflow: hidden;
-  transform: translate(calc(var(--ox) * var(--u) * -1), calc(var(--oy) * var(--u) * -1));
-  transition: transform 900ms cubic-bezier(0.45, 0, 0.2, 1);
   background: #3d7fd0 url(wallpaper.webp) 50% 100% / cover;
   font: 400 calc(13 * var(--u))/1.3 var(--sans);
   color: #1d1d1f;
@@ -446,9 +436,9 @@ h1 { font-weight: 600; letter-spacing: -0.01em; }
 .feature h3 { font-weight: 600; }
 .feature p { margin-top: 4px; color: var(--body); text-wrap: pretty; }
 
-/* Install: every block in it sits one --gap from the next. */
-.install { display: flex; flex-direction: column; gap: var(--gap); padding-top: 96px; }
-.install > * { max-width: 820px; }
+/* Install and Usage: every block in them sits one --gap from the next. */
+.install, .usage { display: flex; flex-direction: column; gap: var(--gap); padding-top: 96px; }
+.install > *, .usage > * { max-width: 820px; }
 h2 { font-weight: 600; }
 .steps, .steps li { display: flex; flex-direction: column; gap: var(--gap); }
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
@@ -473,10 +463,28 @@ h2 { font-weight: 600; }
   transition: transform 160ms ease-out, border-color 150ms ease;
 }
 .copy:active { transform: scale(0.97); }
+/* Agent picker: one agent's command at a time, chosen in the code block's top row. */
+.agents { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 92px 0 10px; }
+.agents[hidden] { display: none; }
+.agents button {
+  height: 34px;
+  padding: 0 12px;
+  font: 500 var(--size)/1 var(--sans);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 160ms ease-out;
+}
+.agents button[aria-selected="true"] { color: var(--ink); background: var(--paper); border-color: var(--line); }
+.agents button:active { transform: scale(0.97); }
+.agents + pre { padding-top: 12px; }
 
 /* Shortcuts: each key cap on its description's baseline. */
 .keys { display: grid; grid-template-columns: max-content 1fr; align-items: baseline; gap: 14px 24px; margin: 0; }
 .keys dd { margin: 0; color: var(--body); }
+.keys-note { color: var(--body); }
 .after { color: var(--muted); }
 .after a { color: var(--ink); }
 
@@ -488,6 +496,7 @@ h2 { font-weight: 600; }
   .nav:hover { color: var(--ink); }
   .button:hover { background: #2c2c2e; }
   .copy:hover { border-color: #c7c7cc; }
+  .agents button:hover { color: var(--ink); }
   .foot a:hover { text-decoration: underline; }
 }
 
@@ -501,13 +510,14 @@ h2 { font-weight: 600; }
   .top { height: 60px; }
   .hero { padding-top: 48px; }
   .device { padding: 5px; border-radius: 13px; }
-  .display { aspect-ratio: 1; border-radius: 8px; }
-  .desk, .hud { --zoom: 2; --view-h: 512; }
+  .display { border-radius: 8px; }
   .features { grid-template-columns: 1fr; gap: 28px; padding-top: 64px; }
-  .install { padding-top: 72px; }
+  .install, .usage { padding-top: 72px; }
   /* Long commands scroll sideways here, at the badges' size; copying them on a phone is rare. */
   .code pre { padding: 14px 16px; font-size: 0.88em; }
   .copy { display: none; }
+  .agents { padding: 8px 8px 0; }
+  .agents button { height: 32px; padding: 0 10px; font-size: 0.88em; }
   .keys { gap: 12px 16px; }
   .foot { margin-top: 72px; }
 }
@@ -538,7 +548,7 @@ h2 { font-weight: 600; }
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8.5M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg>
         Download for Mac
       </a>
-      <a class="more" href="#install">How to install <span aria-hidden="true">→</span></a>
+      <a class="more" href="#install">How to install</a>
     </div>
   </section>
 
@@ -734,22 +744,24 @@ And the Pay button text wraps.</pre></div>
         <div class="code"><pre><code>brew tap mihaicristianfarcas/asides \
   https://github.com/mihaicristianfarcas/asides
 brew install --cask mihaicristianfarcas/asides/asides</code></pre><button class="copy" type="button" hidden>Copy</button></div>
-        <p>Or <a href="https://asides.mihaicristianfarcas.workers.dev/Asides.dmg">download the disk image</a>, drag Asides to Applications, and link the command inside it into a folder on your <code>PATH</code>:</p>
-        <div class="code"><pre><code>mkdir -p ~/.local/bin
-ln -s /Applications/Asides.app/Contents/Helpers/asides \
-  ~/.local/bin/asides</code></pre><button class="copy" type="button" hidden>Copy</button></div>
+        <p>Or <a href="https://asides.mihaicristianfarcas.workers.dev/Asides.dmg">download the disk image</a>, drag Asides to Applications, and open it. It adds the <code>asides</code> command for you; macOS may ask for your password.</p>
       </li>
       <li>
         <p>Run it in your project. The first launch asks for the microphone and downloads the speech model (574 MB).</p>
         <div class="code"><pre><code>cd ~/code/shop &amp;&amp; asides</code></pre><button class="copy" type="button" hidden>Copy</button></div>
       </li>
       <li>
-        <p>Optionally, add it to your coding agent, then ask the agent to listen to your asides. It gets each one as you say it, or a batch when you send it (Preferences → Agents Get Asides).</p>
-        <div class="code"><pre><code>claude mcp add --scope user asides -- asides mcp
+        <p>Optionally, add it to your coding agent, then ask the agent to listen to your asides (in Claude Code, <code>/asides:listen</code>). Each aside reaches it as you say it, or in a batch when you send it (Preferences → Agents Get Asides).</p>
+        <div class="code"><div class="agents" role="tablist" aria-label="Coding agent" hidden><button type="button" role="tab" aria-selected="true">Claude Code</button><button type="button" role="tab" aria-selected="false" tabindex="-1">Codex</button><button type="button" role="tab" aria-selected="false" tabindex="-1">OpenCode</button></div><pre><code>claude mcp add --scope user asides -- asides mcp
 codex mcp add asides -- asides mcp
 opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" type="button" hidden>Copy</button></div>
       </li>
     </ol>
+    <p class="after">Or <a href="https://github.com/mihaicristianfarcas/asides#from-source">build it from source</a> with <code>make install</code>.</p>
+  </section>
+
+  <section class="wrap usage" id="usage">
+    <h2>Usage</h2>
     <dl class="keys">
       <dt><kbd>⌃⌥Space</kbd></dt><dd>Record, then stop. Or hold while you talk.</dd>
       <dt><kbd>⌃⌥N</kbd></dt><dd>Record into a new note.</dd>
@@ -757,13 +769,13 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
       <dt><kbd>Esc</kbd></dt><dd>Cancel. Nothing is written.</dd>
       <dt><kbd>⌃⌥Enter</kbd></dt><dd>Send the batch to your agent, when it gets asides in batches.</dd>
     </dl>
-    <p class="after">Or <a href="https://github.com/mihaicristianfarcas/asides#from-source">build it from source</a> with <code>make install</code>.</p>
+    <p class="keys-note">You can change any shortcut in Preferences → Edit Shortcuts &amp; Settings.</p>
   </section>
 </main>
 
 <footer class="wrap">
   <div class="foot">
-    <span>MIT or Apache-2.0 · by <a href="https://github.com/mihaicristianfarcas">Mihai-Cristian Farcaș</a></span>
+    <span>MIT or Apache-2.0 by <a href="https://github.com/mihaicristianfarcas">Mihai-Cristian Farcaș</a></span>
     <a href="https://github.com/mihaicristianfarcas/asides">Source on GitHub</a>
   </div>
 </footer>
@@ -786,6 +798,39 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
         reset = setTimeout(() => { button.textContent = 'Copy'; }, 1600);
       });
     }
+  }
+
+  // One agent's command at a time. Without JavaScript, the block lists all three, one per line.
+  const picker = document.querySelector('.agents');
+  if (picker) {
+    const panel = picker.nextElementSibling;
+    const code = panel.querySelector('code');
+    const commands = code.textContent.split('\n');
+    const tabs = [...picker.querySelectorAll('[role="tab"]')];
+    const select = (tab) => {
+      tabs.forEach((t, i) => {
+        const on = t === tab;
+        t.setAttribute('aria-selected', on);
+        t.tabIndex = on ? 0 : -1;
+        if (on) code.textContent = commands[i];
+      });
+    };
+    picker.addEventListener('click', (e) => {
+      const tab = e.target.closest('[role="tab"]');
+      if (tab) select(tab);
+    });
+    picker.addEventListener('keydown', (e) => {
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const next = tabs[(tabs.indexOf(document.activeElement) + step + tabs.length) % tabs.length];
+      next.focus();
+      select(next);
+    });
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-label', 'Command');
+    select(tabs[0]);
+    picker.hidden = false;
   }
 
   // The demo. Positions are in units of the desktop's 1024 × 640 grid.
@@ -827,12 +872,6 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
     const r = el.getBoundingClientRect();
     const k = 1024 / d.width;
     return [(r.left - d.left + r.width * fx) * k + dx, (r.top - d.top + r.height * fy) * k + dy];
-  }
-
-  // Where the screen centres on phones, which show only part of the desktop.
-  function look(x, y) {
-    desk.style.setProperty('--fx', x);
-    desk.style.setProperty('--fy', y);
   }
 
   function moveTo([x, y], ms) {
@@ -895,7 +934,6 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
     say.innerHTML = '';
     micOn.hidden = true;
     show('idle', '');
-    look(696, 256);
     pointer.className = 'pointer on';
     moveTo([560, 470], 0);
     desk.getBoundingClientRect();
@@ -965,7 +1003,6 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
       show('done', '#5');
       await wait(400, id);
 
-      look(768, 256);
       moveTo(spot(status, 0.5, 0.6), 900);
       await wait(1050, id);
       await click(id);
@@ -992,7 +1029,6 @@ opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" 
       desk.dataset.app = 'textedit';
       safari.classList.add('inactive');
       editor.classList.add('open');
-      look(610, 330);
       moveTo(spot(editor, 0.75, 0.6), 700);
       // The front matter first, then down to the new entry.
       await wait(2200, id);
