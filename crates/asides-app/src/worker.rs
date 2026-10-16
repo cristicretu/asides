@@ -129,9 +129,7 @@ fn process_recording(
         return Ok(Outcome::NothingHeard);
     }
 
-    let fallback_title = notes::title_from_transcript(&text);
-    let note =
-        target_note(&job.dir, &job.new_note, &fallback_title, job.started, &job.environment, &whisper(&job.model))?;
+    let note = target_note(&job.dir, &job.new_note, job.started, &job.environment, &whisper(&job.model))?;
     let number = note.next_entry_number();
     let mut attachments = Vec::new();
     for image in &job.images {
@@ -150,7 +148,7 @@ fn process_recording(
 }
 
 fn process_image(job: ImageJob) -> Result<Outcome> {
-    let note = target_note(&job.dir, &job.new_note, "Untitled", job.image.at, &job.environment, &whisper(&job.model))?;
+    let note = target_note(&job.dir, &job.new_note, job.image.at, &job.environment, &whisper(&job.model))?;
     let number = note.next_entry_number().saturating_sub(1);
     let attachment = save_image(&note, number, &job.image)?;
     note.append(&attachment.markdown()).context("could not write the note")?;
@@ -158,9 +156,8 @@ fn process_image(job: ImageJob) -> Result<Outcome> {
 }
 
 fn process_dictation(job: DictationJob) -> Result<Outcome> {
-    let fallback_title = notes::title_from_transcript(&job.text);
     let transcription = format!("asides {} · {}", env!("CARGO_PKG_VERSION"), job.source);
-    let note = target_note(&job.dir, &job.new_note, &fallback_title, job.at, &job.environment, &transcription)?;
+    let note = target_note(&job.dir, &job.new_note, job.at, &job.environment, &transcription)?;
     let number = note.next_entry_number();
     let time = job.at.format("%H:%M").to_string();
     note.append(&markdown::compose_dictation_entry(number, &time, job.source, &job.text))
@@ -174,10 +171,10 @@ fn whisper(model: &str) -> String {
 }
 
 /// The latest note, or a newly created one (with front matter) when asked for or when none exists.
+/// A new note is titled as asked, or [`notes::DEFAULT_TITLE`]; never after what was said.
 fn target_note(
     dir: &Path,
     new_note: &Option<Option<String>>,
-    fallback_title: &str,
     created: DateTime<Local>,
     environment: &Environment,
     transcription: &str,
@@ -187,7 +184,7 @@ fn target_note(
     {
         return Ok(note);
     }
-    let title = new_note.clone().flatten().unwrap_or_else(|| fallback_title.to_string());
+    let title = new_note.clone().flatten().unwrap_or_else(|| notes::DEFAULT_TITLE.to_string());
     let metadata = Metadata {
         title: notes::sanitize_title(&title),
         created,
@@ -249,5 +246,40 @@ fn save_audio(note: &Note, number: u32, started: DateTime<Local>, pcm: &[f32]) -
         Ok(format!("audio/{stem}.m4a"))
     } else {
         Ok(format!("audio/{stem}.wav"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn dictate(dir: &Path, text: &str, new_note: Option<Option<String>>) -> String {
+        let job = DictationJob {
+            dir: dir.to_path_buf(),
+            text: text.into(),
+            at: Local.with_ymd_and_hms(2026, 10, 15, 14, 32, 0).unwrap(),
+            source: "Wispr Flow",
+            new_note,
+            environment: Environment::default(),
+        };
+        match process_dictation(job).unwrap() {
+            Outcome::Appended { note, .. } => note,
+            _ => panic!("not appended"),
+        }
+    }
+
+    #[test]
+    fn new_notes_get_a_generic_title_not_the_first_sentence() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(dictate(tmp.path(), "The checkout button does nothing. Fix it.", None), "Untitled");
+        assert_eq!(dictate(tmp.path(), "Another thing entirely.", Some(None)), "Untitled");
+        assert_eq!(dictate(tmp.path(), "Something else.", Some(Some("Checkout".into()))), "Checkout");
+
+        let notes = notes::list_notes(tmp.path());
+        let titles: Vec<&str> = notes.iter().map(|n| n.title.as_str()).collect();
+        assert_eq!(titles, ["Untitled", "Untitled 2", "Checkout"]);
+        let content = fs::read_to_string(notes[0].file()).unwrap();
+        assert!(content.starts_with("---\ntitle: Untitled\n"), "{content}");
     }
 }

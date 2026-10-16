@@ -96,12 +96,13 @@ check "Romanian transcript with diacritics" contains "$NOTE" "Butonul de salvare
 check "metadata written only once" test "$(grep -c '^title:' "$NOTE")" = 1
 check "same note" test "$("$CLI" path)" = "$NOTE"
 
-echo "New untitled note: titled after the first sentence"
+echo "New untitled note: a generic title, not the first sentence"
 "$CLI" new >/dev/null
 "$CLI" simulate "$FIX/ro_bug.wav" >/dev/null
 for _ in $(seq 1 120); do NOTE2=$("$CLI" path) && [ "$NOTE2" != "$NOTE" ] && break; sleep 0.5; done
 wait_for "$NOTE2" "## 1 ·"
-check "title from the first sentence" contains "$NOTE2" "title: Butonul de salvare nu face nimic după ce schimb parola"
+check "note folder named Untitled" grep -q "/.asides/[0-9-]* Untitled/notes.md$" <<<"$NOTE2"
+check "front matter: generic title" contains "$NOTE2" "title: Untitled"
 check "first note untouched" test "$(grep -c '^## ' "$NOTE")" = 2
 
 echo "Wispr Flow dictations"
@@ -139,7 +140,7 @@ check "binding another repo puts it first" test "$(recent | tr '\n' ' ')" = "adm
 check "the new repo has no notes yet" grep -q "No notes in" <<<"$("$CLI" -C "$OTHER" status)"
 "$CLI" >/dev/null
 check "switching back reorders the list" test "$(recent | tr '\n' ' ')" = "shop admin "
-check "and appends to the same note again" grep -q 'appending to "Butonul' <<<"$("$CLI")"
+check "and appends to the same note again" grep -q 'appending to "Untitled"' <<<"$("$CLI")"
 
 echo "Coding agents (asides mcp)"
 /usr/bin/python3 -I "$ROOT/scripts/e2e-mcp.py" "$CLI" "$REPO" "$FIX" "$CONFIG" "$SUPPORT/listeners" "$OTHER"

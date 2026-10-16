@@ -98,7 +98,7 @@ self-signed identity in your login keychain and asks for your password.
 | Command | |
 |---|---|
 | `asides` | Bind the repo you're in (its git root, or the current directory if it isn't a repo) and start the menu-bar app. Recordings append to the latest note there. |
-| `asides new [TITLE]` | The next recording starts a new note, titled TITLE or after your first sentence. |
+| `asides new [TITLE]` | The next recording starts a new note, titled TITLE or "Untitled". |
 | `asides path` | Print the latest note's path, e.g. `claude "fix the bugs in $(asides path)"`. |
 | `asides open` | Open the latest note in your Markdown editor. |
 | `asides status` | Show what the app is doing and where it's bound. |

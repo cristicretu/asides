@@ -8,6 +8,8 @@ use chrono::{DateTime, Local};
 
 use crate::paths::{NOTE_FILE, NOTES_DIR};
 
+/// The title of a note started without one (`asides new` with no TITLE, or a recording).
+pub const DEFAULT_TITLE: &str = "Untitled";
 const MAX_TITLE_CHARS: usize = 60;
 /// Length of the `YYYY-MM-DD-HHMM` folder-name prefix.
 const STAMP_LEN: usize = 15;
@@ -129,25 +131,7 @@ pub fn sanitize_title(raw: &str) -> String {
         };
     }
     let title = title.trim_end_matches(|c: char| c.is_whitespace() || ".,;!?-".contains(c));
-    if title.is_empty() { "Untitled".into() } else { title.to_string() }
-}
-
-/// The first sentence of a transcript, used to name a note when no title was given.
-pub fn title_from_transcript(text: &str) -> String {
-    let text = text.trim();
-    let mut end = text.len();
-    let mut chars = text.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if c == '\n' {
-            end = i;
-            break;
-        }
-        if ".!?".contains(c) && chars.peek().is_none_or(|(_, next)| next.is_whitespace()) {
-            end = i;
-            break;
-        }
-    }
-    sanitize_title(&text[..end])
+    if title.is_empty() { DEFAULT_TITLE.into() } else { title.to_string() }
 }
 
 /// Zips the note folder (notes.md, images, audio) for sharing. Entry names are UTF-8 flagged, so
@@ -253,16 +237,6 @@ mod tests {
         let t = sanitize_title(long);
         assert!(t.chars().count() <= 60, "{t}");
         assert_eq!(t, "Debugging the checkout flow and the cart drawer thoughts on");
-    }
-
-    #[test]
-    fn titles_from_first_sentence() {
-        assert_eq!(
-            title_from_transcript(" Debugging the checkout flow. Thoughts on the cart UI."),
-            "Debugging the checkout flow"
-        );
-        assert_eq!(title_from_transcript("Versiunea 2.5 are un bug! Restul"), "Versiunea 2.5 are un bug");
-        assert_eq!(title_from_transcript(""), "Untitled");
     }
 
     #[test]

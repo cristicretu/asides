@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Bind this directory; the next recording starts a new note (titled TITLE, or after your first sentence).
+    /// Bind this directory; the next recording starts a new note, titled TITLE or "Untitled".
     New { title: Vec<String> },
     /// Print the path of the latest note in this directory.
     Path,
@@ -148,7 +148,7 @@ fn bind(dir: &Path, new_note: bool, title: Option<String>) -> Result<()> {
     let target = if new_note {
         match &title {
             Some(t) => format!("next recording starts a new note \"{t}\""),
-            None => "next recording starts a new note (titled after your first sentence)".into(),
+            None => format!("next recording starts a new note \"{}\"", notes::DEFAULT_TITLE),
         }
     } else {
         match notes::latest_note(dir) {
