@@ -485,8 +485,6 @@ h2 { font-weight: 600; }
 .keys { display: grid; grid-template-columns: max-content 1fr; align-items: baseline; gap: 14px 24px; margin: 0; }
 .keys dd { margin: 0; color: var(--body); }
 .keys-note { color: var(--body); }
-.after { color: var(--muted); }
-.after a { color: var(--ink); }
 
 /* Footer */
 .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; margin-top: 96px; padding: 24px 0 48px; color: var(--muted); border-top: 1px solid var(--line); }
@@ -745,6 +743,7 @@ And the Pay button text wraps.</pre></div>
   https://github.com/mihaicristianfarcas/asides
 brew install --cask mihaicristianfarcas/asides/asides</code></pre><button class="copy" type="button" hidden>Copy</button></div>
         <p>Or <a href="https://download.asides.mihaicristian.dev/Asides.dmg">download the disk image</a>, drag Asides to Applications, and open it. It adds the <code>asides</code> command for you; macOS may ask for your password.</p>
+        <p>Or <a href="https://github.com/mihaicristianfarcas/asides#from-source">build it from source</a> with <code>make install</code>.</p>
       </li>
       <li>
         <p>Run it in your project. The first launch asks for the microphone and downloads the speech model (574 MB).</p>
@@ -757,7 +756,6 @@ codex mcp add asides -- asides mcp
 opencode mcp add --global asides -- asides mcp</code></pre><button class="copy" type="button" hidden>Copy</button></div>
       </li>
     </ol>
-    <p class="after">Or <a href="https://github.com/mihaicristianfarcas/asides#from-source">build it from source</a> with <code>make install</code>.</p>
   </section>
 
   <section class="wrap usage" id="usage">
