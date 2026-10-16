@@ -37,6 +37,7 @@ bundle: build
 	sed 's/__VERSION__/$(VERSION)/g' packaging/Info.plist > $(APP)/Contents/Info.plist
 	cp target/release/asides-app $(APP)/Contents/MacOS/$(APP_NAME)
 	cp target/release/asides $(APP)/$(CLI_IN_APP)
+	cp packaging/Asides.icns $(APP)/Contents/Resources/
 	# Sign inside-out: the nested CLI first, then the app.
 	$(CODESIGN) --identifier $(BUNDLE_ID).cli $(APP)/$(CLI_IN_APP)
 	$(CODESIGN) --entitlements packaging/Asides.entitlements $(APP)

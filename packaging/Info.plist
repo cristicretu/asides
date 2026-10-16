@@ -10,6 +10,8 @@
 	<string>io.github.mihaicristianfarcas.asides</string>
 	<key>CFBundleExecutable</key>
 	<string>Asides</string>
+	<key>CFBundleIconFile</key>
+	<string>Asides</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>
