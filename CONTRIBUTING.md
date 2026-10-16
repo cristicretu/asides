@@ -205,9 +205,10 @@ certificate in your keychain.
 
 ## The website
 
-`docs/` is the landing page, https://asides.mihaicristian.dev. `make publish-site` deploys it to a
-Cloudflare Worker that only serves those files (`packaging/site/`), so deploy after its changes
-reach `main`; it needs Wrangler, logged in to the Cloudflare account. It's one static `index.html`
+`docs/` is the landing page, https://asides.mihaicristian.dev, a Cloudflare Worker that only serves
+those files (`packaging/site/`). Pushes to `main` that change `docs/` deploy it (the Website
+workflow, with the repository's `CLOUDFLARE_API_TOKEN` secret); `make publish-site` deploys it from
+your machine, with Wrangler logged in to the Cloudflare account. It's one static `index.html`
 with inline CSS and JavaScript and no build step: open it in a browser to preview it (`python3 -m
 http.server -d docs` serves it at http://localhost:8000). The demo is a Mac desktop drawn on a 1024
 × 640 grid that scales with the page, phones included, like a picture. What the tester says shows as

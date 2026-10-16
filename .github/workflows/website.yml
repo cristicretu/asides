@@ -1,0 +1,25 @@
+name: Website
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', 'packaging/site/**']
+  # Or by hand, from the Actions tab.
+  workflow_dispatch:
+
+# One deploy at a time, in push order.
+concurrency:
+  group: website
+
+jobs:
+  deploy:
+    # Static files, no build: any runner will do.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to asides.mihaicristian.dev
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          wranglerVersion: "4.149.0"
+          command: deploy --config packaging/site/wrangler.jsonc

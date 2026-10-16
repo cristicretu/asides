@@ -33,7 +33,7 @@ It's a Rust workspace:
 | Share image | `python3 scripts/make-og.py` (renders `docs/og.png` from the demo; needs Firefox) |
 | App icon | `swift scripts/make-icon.swift` (writes `packaging/Asides.icns`) |
 | Notarized release | `make release` (only when the maintainer asks; see Rules) |
-| Deploy the website | `make publish-site` (only when the maintainer asks) |
+| Deploy the website | pushes to `main` deploy it; `make publish-site` by hand (only when the maintainer asks) |
 
 Run format, lint and unit tests after every change. Run `make e2e` when CLI or app behavior
 changes.

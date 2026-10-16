@@ -3,6 +3,7 @@
 // dist/download, then deploys.
 {
   "name": "asides-download",
+  "account_id": "21d492e0358184462c359237f9794931",
   "compatibility_date": "2026-10-01",
   "assets": { "directory": "../../dist/download" },
   "routes": [{ "pattern": "download.asides.mihaicristian.dev", "custom_domain": true }],
