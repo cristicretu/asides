@@ -14,7 +14,7 @@ const ICONS: &[(&str, &str)] = &[
         icon(r#"<path d="M3.5 16.5 16.5 3.5l4 4-13 13z"/><path d="M7.5 12.5l2 2M10.5 9.5l2 2M13.5 6.5l2 2"/>"#),
     ),
     (
-        "mark",
+        "annotate",
         icon(
             r#"<path d="M12 21s-6.5-5.8-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.2 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.2"/>"#,
         ),
@@ -52,6 +52,17 @@ const ICONS: &[(&str, &str)] = &[
     ("check", icon(r#"<path d="M5 12.5l4.5 4.5L19 7.5"/>"#)),
     ("send", icon(r#"<path d="M5 12h13M12.5 5.5 19 12l-6.5 6.5"/>"#)),
     ("close", icon(r#"<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>"#)),
+    (
+        "grip",
+        icon(
+            r#"<circle cx="9" cy="6.5" r="1"/><circle cx="15" cy="6.5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="17.5" r="1"/><circle cx="15" cy="17.5" r="1"/>"#,
+        ),
+    ),
+    ("fold", icon(r#"<path d="M14.5 6.5 9 12l5.5 5.5"/>"#)),
+    ("unfold", icon(r#"<path d="M9.5 6.5 15 12l-5.5 5.5"/>"#)),
+    ("live", icon(r#"<path d="M8 5.5v13L18.5 12z"/>"#)),
+    ("pause", icon(r#"<path d="M9 6v12M15 6v12"/>"#)),
+    ("trash", icon(r#"<path d="M4.5 7h15M9.5 7V5h5v2M6.5 7l1 12.5h9l1-12.5"/><path d="M10.5 10.5v6M13.5 10.5v6"/>"#)),
 ];
 
 pub struct Assets;

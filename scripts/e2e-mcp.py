@@ -161,12 +161,12 @@ check("get_asides reads the latest note with its metadata", 'Note "' in note and
 prompt = client.call("prompts/get", {"name": "asides"})["messages"][0]["content"]["text"]
 check("the asides prompt carries the note", prompt.startswith("Work through my asides") and "## 1 ·" in prompt, prompt)
 
-# The feedback loop: the agent acts on the marks of a Measure & Annotate entry (#4.1, #4.2, #4.3).
+# The feedback loop: the agent acts on the annotations of a Measure & Annotate entry (#4.1, #4.2, #4.3).
 pending = text(client.call("tools/call", tool("get_pending_asides")))
 check("get_pending_asides lists the Measure & Annotate entry", "## 4 · " in pending and "### 3. Arrow from" in pending,
       pending)
 resolved = text(client.call("tools/call", tool("resolve_aside", aside="4.2", summary="Removed the empty space")))
-check("resolve_aside on one mark", resolved.startswith("Resolved #4.2"), resolved)
+check("resolve_aside on one annotation", resolved.startswith("Resolved #4.2"), resolved)
 dismissed = text(client.call("tools/call", tool("dismiss_aside", aside="4.3", reason="It's already there")))
 check("dismiss_aside on another", dismissed.startswith("Dismissed #4.3"), dismissed)
 replied = text(client.call("tools/call", tool("reply_to_aside", aside="4.1", message="Left or right edge?")))
@@ -174,7 +174,7 @@ check("reply_to_aside on the last one", replied.startswith("Replied to #4.1"), r
 check("an aside that doesn't exist is refused",
       client.call("tools/call", tool("dismiss_aside", aside="4.9", reason="x"))["isError"])
 pending = text(client.call("tools/call", tool("get_pending_asides")))
-check("pending asides show the agent's question, the entry open while a mark is",
+check("pending asides show the agent's question, the entry open while an annotation is",
       "> **e2e-agent**: Left or right edge?" in pending and "## 4 · " in pending, pending)
 note_path = subprocess.run([cli, "-C", repo, "path"], check=True, capture_output=True, text=True).stdout.strip()
 with open(os.path.join(os.path.dirname(note_path), "threads.jsonl")) as f:

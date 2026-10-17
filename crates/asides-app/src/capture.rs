@@ -75,9 +75,11 @@ type Done = Arc<dyn Fn(Result<Vec<Capture>, String>) + Send + Sync>;
 /// Screens still to come, the captures so far, and the last error.
 type Results = Arc<Mutex<(usize, Vec<Capture>, Option<String>)>>;
 
-/// Captures `displays` (ID, width and height in pixels); `done` runs once, on a background queue.
+/// Captures `displays` (ID, width and height in pixels), leaving out the windows of process
+/// `without` (the live toolbar's); `done` runs once, on a background queue.
 pub fn capture(
     displays: Vec<(u32, usize, usize)>,
+    without: Option<i32>,
     done: impl Fn(Result<Vec<Capture>, String>) + Send + Sync + 'static,
 ) {
     let done: Done = Arc::new(done);
@@ -94,10 +96,18 @@ pub fn capture(
             return done(Err("No screen to capture.".into()));
         }
         let results: Results = Arc::new(Mutex::new((wanted.len(), Vec::new(), None)));
+        let left_out: Vec<objc2::rc::Retained<SCWindow>> = match without {
+            Some(pid) => unsafe { content.windows() }
+                .iter()
+                .filter(|w| unsafe { w.owningApplication() }.is_some_and(|a| unsafe { a.processID() } == pid))
+                .collect(),
+            None => Vec::new(),
+        };
+        let left_out = NSArray::from_retained_slice(&left_out);
         for (id, width, height, display) in wanted {
-            let none: objc2::rc::Retained<NSArray<SCWindow>> = NSArray::new();
-            let filter =
-                unsafe { SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &none) };
+            let filter = unsafe {
+                SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &left_out)
+            };
             let config = unsafe { SCStreamConfiguration::new() };
             unsafe {
                 config.setWidth(width);

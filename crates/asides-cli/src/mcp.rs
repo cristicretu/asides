@@ -69,12 +69,13 @@ fn instructions(listen: &str) -> String {
          switch back. When they ask you to work through their notes, call get_asides (or get_pending_asides for \
          what's still open). Transcripts are verbatim speech-to-text: expect misheard words, especially names of \
          projects, files and libraries. Measure & Annotate shows up in entries as an annotated screenshot with \
-         what the user measured (sizes and distances in points, guides) and numbered marks (### 1., ### 2.): an \
-         element, an area, or a drawing (an arrow from one thing to another, a circled or underlined part), with \
-         the app and window, the element's location (for web pages the URL and a CSS-like selector) and any typed \
-         feedback. In a recorded entry, each mark sits where the user was speaking when they made it, so what \
-         they said around it is about it; entries marked `Screen` were made without speaking. An aside is #N \
-         (entry N of the note) or #N.M (mark M of entry N). When you've handled one, call resolve_aside with a \
+         what the user measured (sizes and distances in points, guides) and numbered annotations (### 1., ### \
+         2.): an element, an area, or a drawing (an arrow from one thing to another, a circled or underlined \
+         part), with the app and window, the element's location (for web pages the URL and a CSS-like selector) \
+         and the user's feedback on it: typed (**Feedback:**) or said about that annotation (**Said:**, a \
+         verbatim transcript). In a recorded entry, each measurement and annotation sits where the user was \
+         speaking when they made it, so what they said around it is about it; entries marked `Screen` were made \
+         without speaking. An aside is #N (entry N of the note) or #N.M (annotation M of entry N). When you've handled one, call resolve_aside with a \
          short summary; dismiss_aside with a reason if you won't act on it; reply_to_aside to ask the user \
          something. The user sees these in the Asides menu. measure_image measures a screenshot (distances \
          between edges, the bounds of an object)."

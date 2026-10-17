@@ -16,13 +16,14 @@ const HEADER: &str = r#"# Asides settings. Changes are picked up automatically.
 # it's transcribed; "batch" holds them until you choose Send to Agent.
 # wispr_flow_apps: app names or bundle IDs whose Wispr Flow dictations are added; [] means any app.
 # auto_new_note: start a new note when you've switched git branch, or after 8 hours without asides.
-# annotation_detail: how much Measure & Annotate puts in an aside: "compact", "standard", "detailed"
+# annotation_detail: how much each annotation says in an aside: "compact", "standard", "detailed"
 # or "forensic".
 # [measure] color: lines and labels (#RRGGBB); units: "pt" or "px"; tolerance: 0-100 (%);
-# identify_elements: name what's under each mark (needs the Accessibility permission);
+# identify_elements: name what's under each annotation (needs the Accessibility permission);
 # padding: points of screen kept around what you measured in the screenshot;
-# record: start recording when Measure & Annotate opens, so you can talk while you mark;
-# toolbar: show its toolbar (shift+tab hides and shows it; every action also has a key).
+# record: start talking when Asides opens;
+# toolbar: show its toolbar on a frozen screen (shift+tab hides and shows it; every action also has
+# a key).
 # [agents] terminal: the app New Agent Session opens agents in ("Terminal", the default when "";
 # "Ghostty", "iTerm", "Diri", or another that runs .command scripts); worktrees: a second session in
 # a repo works in its own git worktree; claude, codex, opencode:
@@ -35,7 +36,8 @@ const HEADER: &str = r#"# Asides settings. Changes are picked up automatically.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// Holding the record shortcut records until release; a short tap toggles.
+    /// While Asides is open, holding its shortcut (or Space) talks until it's let go; a tap on the
+    /// shortcut adds it all to the aside, on Space it starts or stops talking.
     pub hold_to_talk: bool,
     /// Images copied to the clipboard while recording are attached automatically.
     pub auto_attach_images: bool,
@@ -101,7 +103,7 @@ pub struct Measure {
     pub identify_elements: bool,
     /// Points of screen kept around what was measured in the screenshot added to the aside.
     pub padding: f64,
-    /// Start recording when the overlay opens, to talk while marking.
+    /// Start recording when the overlay opens, to talk while annotating.
     pub record: bool,
     /// Show the overlay's toolbar (its key hides and shows it; every action has a key).
     pub toolbar: bool,
@@ -129,7 +131,7 @@ impl Default for Measure {
 #[serde(default)]
 pub struct OverlayKeys {
     pub measure: String,
-    pub mark: String,
+    pub annotate: String,
     pub draw: String,
     pub shot: String,
     pub hold_horizontal: String,
@@ -149,15 +151,19 @@ pub struct OverlayKeys {
     /// Hide or show the toolbar.
     pub toolbar: String,
     pub restore: String,
-    /// Hold to talk (a tap toggles), like the record shortcut.
+    /// Hold to talk (a tap toggles), like the Asides shortcut.
     pub talk: String,
     pub help: String,
     /// Add to the aside.
     pub done: String,
-    /// Add to the aside with the whole screen, not just around what's marked.
+    /// Add to the aside with the whole screen, not just around what's annotated.
     pub done_whole_screen: String,
     /// Add to the aside and send it to the agent.
     pub send: String,
+    /// Back to the live screen (the freeze shortcut does it too, from anywhere).
+    pub live: String,
+    /// Close without adding anything (the toolbar's ×); a second press when there's something to
+    /// lose.
     pub close: String,
 }
 
@@ -166,7 +172,7 @@ impl Default for OverlayKeys {
         let k = |s: &str| s.to_string();
         Self {
             measure: k("d"),
-            mark: k("a"),
+            annotate: k("a"),
             draw: k("p"),
             shot: k("cmd+s, s"),
             hold_horizontal: k("h"),
@@ -190,6 +196,7 @@ impl Default for OverlayKeys {
             done: k("enter"),
             done_whole_screen: k("alt+enter"),
             send: k("cmd+enter"),
+            live: k(""),
             close: k("escape"),
         }
     }
@@ -208,14 +215,17 @@ pub enum AgentDelivery {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Shortcuts {
-    pub record: String,
-    pub record_new_note: String,
+    /// Opens Asides over the live screen. While it's open, a tap adds it all to the aside, and a
+    /// hold talks (with `hold_to_talk`).
+    pub asides: String,
+    /// The same, into a new note.
+    pub new_note: String,
     pub attach_image: String,
-    pub cancel: String,
     /// Only registered while `agent_delivery` is `batch`.
     pub send_to_agent: String,
-    /// Measure & Annotate: freezes the screen to measure and annotate it.
-    pub measure: String,
+    /// Pauses the live screen (freezes it to measure and annotate it), and plays it again. Opens
+    /// Asides frozen.
+    pub freeze: String,
     /// Switches the target to the next agent session (then Notes Only). Only registered while a
     /// session is listening.
     pub next_target: String,
@@ -246,12 +256,11 @@ impl Default for Config {
 impl Default for Shortcuts {
     fn default() -> Self {
         Self {
-            record: "ctrl+alt+Space".into(),
-            record_new_note: "ctrl+alt+KeyN".into(),
+            asides: "ctrl+alt+Space".into(),
+            new_note: "ctrl+alt+KeyN".into(),
             attach_image: "ctrl+alt+KeyV".into(),
-            cancel: "Escape".into(),
             send_to_agent: "ctrl+alt+Enter".into(),
-            measure: "ctrl+alt+KeyM".into(),
+            freeze: "ctrl+alt+KeyP".into(),
             next_target: "ctrl+alt+Tab".into(),
         }
     }
@@ -329,17 +338,17 @@ mod tests {
         assert_eq!(Config::load(&path).unwrap(), Config::default());
         let config = Config {
             keep_audio: true,
-            shortcuts: Shortcuts { record: "cmd+shift+KeyR".into(), ..Default::default() },
+            shortcuts: Shortcuts { asides: "cmd+shift+KeyR".into(), ..Default::default() },
             ..Default::default()
         };
         config.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap(), config);
 
-        fs::write(&path, "sounds = false\n[shortcuts]\ncancel = \"F12\"\n").unwrap();
+        fs::write(&path, "sounds = false\n[shortcuts]\nfreeze = \"F12\"\n").unwrap();
         let partial = Config::load(&path).unwrap();
         assert!(!partial.sounds && partial.hold_to_talk);
-        assert_eq!(partial.shortcuts.cancel, "F12");
-        assert_eq!(partial.shortcuts.record, "ctrl+alt+Space");
+        assert_eq!(partial.shortcuts.freeze, "F12");
+        assert_eq!(partial.shortcuts.asides, "ctrl+alt+Space");
         assert_eq!((partial.agent_delivery, partial.wispr_flow), (AgentDelivery::Each, false));
 
         fs::write(&path, "agent_delivery = \"batch\"\nwispr_flow = true\nwispr_flow_apps = [\"Safari\"]\n").unwrap();
@@ -349,10 +358,10 @@ mod tests {
 
         // Older files have no Measure & Annotate settings.
         assert_eq!((agents.measure.clone(), agents.annotation_detail), (Measure::default(), Detail::Standard));
-        assert_eq!(agents.shortcuts.measure, "ctrl+alt+KeyM");
+        assert_eq!(agents.shortcuts.freeze, "ctrl+alt+KeyP");
         fs::write(
             &path,
-            "annotation_detail = \"forensic\"\n[measure]\nunits = \"px\"\ntolerance = 20\n[measure.keys]\nmark = \"m\"\n",
+            "annotation_detail = \"forensic\"\n[measure]\nunits = \"px\"\ntolerance = 20\n[measure.keys]\nannotate = \"m\"\n",
         )
         .unwrap();
         let measure = Config::load(&path).unwrap();
@@ -372,6 +381,6 @@ mod tests {
             (agents.terminal.as_str(), agents.claude, agents.worktrees),
             ("Terminal", vec!["--model".into(), "opus".into()], true)
         );
-        assert_eq!((measure.measure.keys.mark.as_str(), measure.measure.keys.draw.as_str()), ("m", "p"));
+        assert_eq!((measure.measure.keys.annotate.as_str(), measure.measure.keys.draw.as_str()), ("m", "p"));
     }
 }

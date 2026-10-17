@@ -8,21 +8,21 @@ pub const LABEL: u32 = 0x1c1c1e;
 pub const LABEL_ALPHA: f32 = 0.92;
 pub const GUIDE: u32 = 0x0a84ff;
 /// Markers on an element or a point.
-pub const MARK_BLUE: u32 = 0x3b82f6;
+pub const ANNOTATION_BLUE: u32 = 0x3b82f6;
 /// Markers on an area.
-pub const MARK_GREEN: u32 = 0x22c55e;
+pub const ANNOTATION_GREEN: u32 = 0x22c55e;
 /// Fill of a held or dragged area, over the accent color.
 pub const AREA_TINT: f32 = 0.14;
 /// Arrows and sketches.
 pub const DRAW_WIDTH: f32 = 3.0;
 /// The UI's own color ("soft blue cloud"): the selected tool, the main buttons, chosen chips, the
-/// menu's highlight, the caret. Measuring and marks keep their own, high-contrast colors.
+/// menu's highlight, the caret. Measuring and annotations keep their own, high-contrast colors.
 pub const UI: u32 = 0xc2d6f6;
 pub const UI_LIGHT: u32 = 0xd1dff6;
 pub const UI_DEEP: u32 = 0x92b6f0;
 /// Text and icons on the UI color.
 pub const UI_INK: u32 = 0x16213a;
-/// What a mark asks for, as the card's dots show it.
+/// What an annotation asks for, as the card's dots show it.
 pub const INTENT_FIX: u32 = 0xff6b6b;
 pub const INTENT_CHANGE: u32 = 0xf5b14c;
 pub const INTENT_QUESTION: u32 = UI_DEEP;
@@ -62,13 +62,13 @@ fn channels(value: u32) -> (f64, f64, f64) {
     (c(16), c(8), c(0))
 }
 
-/// A mark's color and the alpha of its fill: drawings in the accent color, areas green, elements
+/// An annotation's color and the alpha of its fill: drawings in the accent color, areas green, elements
 /// and points blue.
-pub fn mark_color(a: &Annotation, accent: u32) -> (f64, f64, f64, f32) {
+pub fn annotation_color(a: &Annotation, accent: u32) -> (f64, f64, f64, f32) {
     let value = match (&a.shape, a.area) {
         (Some(_), _) => accent,
-        (None, Some(_)) => MARK_GREEN,
-        (None, None) => MARK_BLUE,
+        (None, Some(_)) => ANNOTATION_GREEN,
+        (None, None) => ANNOTATION_BLUE,
     };
     let (r, g, b) = channels(value);
     (r, g, b, 0.1)

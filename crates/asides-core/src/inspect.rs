@@ -1,6 +1,6 @@
-//! What the user measured, marked and drew on screen with Measure & Annotate, and how it reads in an
+//! What the user measured, annotated and drew on screen with Measure & Annotate, and how it reads in an
 //! aside. Measurements are PixelSnap's (distances between edges, the bounds of an object, guides);
-//! marks are numbered, on an element, an area or a drawing (an arrow, a sketch), each with optional
+//! annotations are numbered, on an element, an area or a drawing (an arrow, a sketch), each with optional
 //! typed feedback, an intent and a severity, as in Agentation, and with what the user said around
 //! it. Positions are in points, origin at the screen's top-left corner, and shown in points or
 //! pixels as the user chose.
@@ -210,7 +210,7 @@ impl Severity {
     }
 }
 
-/// A mark drawn with the Draw tool: an arrow (from what to where) or a freehand sketch (circling
+/// An annotation drawn with the Draw tool: an arrow (from what to where) or a freehand sketch (circling
 /// or underlining something). Points are in the screen's points.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -433,13 +433,17 @@ fn css_part(node: &Node) -> String {
 #[serde(default)]
 pub struct Annotation {
     pub number: u32,
+    /// Which annotation this is for the rest of the session: numbers change when one is removed.
+    pub key: u32,
     /// Where the marker is, in points.
     pub at: (f64, f64),
     /// For an area annotation (dragged), the area.
     pub area: Option<PtRect>,
     pub element: Option<Element>,
-    /// Typed feedback; empty when the user said it instead (it follows in the transcript).
+    /// Typed feedback.
     pub comment: String,
+    /// What the user said about it, recorded from its card: verbatim transcripts.
+    pub said: Vec<Said>,
     pub intent: Option<Intent>,
     pub severity: Option<Severity>,
     pub look: Option<Look>,
@@ -449,6 +453,15 @@ pub struct Annotation {
     pub shape: Option<Shape>,
     /// What an arrow points to.
     pub target: Option<Element>,
+}
+
+/// A recording of what the user said about one annotation (`take`, the app's id for it), and its
+/// transcript.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Said {
+    pub take: u64,
+    pub text: String,
 }
 
 impl Annotation {
@@ -492,7 +505,7 @@ impl Annotation {
         }
     }
 
-    /// The part of the screen it marks: its area, its drawing, or the element it's on.
+    /// The part of the screen it annotates: its area, its drawing, or the element it's on.
     pub fn region(&self) -> Option<PtRect> {
         self.area.or(self.shape.as_ref().map(Shape::bounds)).or(self.element.as_ref().and_then(|e| e.frame))
     }
@@ -506,6 +519,9 @@ pub struct Inspection {
     pub units: Units,
     #[serde(default)]
     pub measurements: Vec<Measurement>,
+    /// When each measurement was made, in seconds into the session.
+    #[serde(default)]
+    pub measurement_times: Vec<f32>,
     #[serde(default)]
     pub guides: Vec<Guide>,
     #[serde(default)]
@@ -536,16 +552,38 @@ impl Inspection {
         PtRect::new(x, y, (all.right() + padding).min(full.width) - x, (all.bottom() + padding).min(full.height) - y)
     }
 
-    /// The measurements block: what was measured, in the chosen units. `None` with nothing measured.
+    /// What goes with the screenshot about the measurements: their units and screen (the screen's
+    /// left out at compact detail), and the guides. Each measurement is a line of its own
+    /// (`measurement_lines`), placed when it was made.
     pub fn measurements_markdown(&self, detail: Detail) -> Option<String> {
         if self.measurements.is_empty() && self.guides.is_empty() {
             return None;
         }
         let (scale, units) = (self.screen.scale, self.units);
+        let mut text = if detail == Detail::Compact {
+            format!("**Measured** in {}", units.label())
+        } else {
+            let mut screen =
+                format!("{} × {} pt, @{}x", n_pt(self.screen.width), n_pt(self.screen.height), n_pt(scale));
+            if let Some(name) = &self.screen.name {
+                screen = format!("{name}, {screen}");
+            }
+            format!("**Measured** in {} (screen: {screen})", units.label())
+        };
+        let guides = guides_text(&self.guides, scale, units);
+        if !guides.is_empty() {
+            text.push_str(&format!("\n**Guides:** {guides}"));
+        }
+        Some(text)
+    }
+
+    /// Each measurement as a list item: `- Area 120 × 32 (15:4) at (380, 200)`.
+    pub fn measurement_lines(&self) -> Vec<String> {
+        let (scale, units) = (self.screen.scale, self.units);
         let n = |v: f64| num(v, scale, units);
-        let mut lines = Vec::new();
-        for m in &self.measurements {
-            lines.push(match m {
+        self.measurements
+            .iter()
+            .map(|m| match m {
                 Measurement::Distance { x, y, across, down } => {
                     let run = |r: &Run, axis: &str, direction: &str, before: &str, after: &str| {
                         let start =
@@ -560,7 +598,7 @@ impl Inspection {
                     .into_iter()
                     .flatten()
                     .collect();
-                    format!("Distance from ({}, {}): {}", n(*x), n(*y), runs.join(", "))
+                    format!("- Distance from ({}, {}): {}", n(*x), n(*y), runs.join(", "))
                 }
                 Measurement::Area { rect, snapped } => {
                     let ratio = crate::measure::aspect_ratio(rect.width, rect.height)
@@ -568,7 +606,7 @@ impl Inspection {
                         .map(|r| format!(" ({r})"))
                         .unwrap_or_default();
                     format!(
-                        "Area {} × {}{ratio} at ({}, {}){}",
+                        "- Area {} × {}{ratio} at ({}, {}){}",
                         n(rect.width),
                         n(rect.height),
                         n(rect.x),
@@ -576,30 +614,14 @@ impl Inspection {
                         if *snapped { ", snapped to the object inside" } else { "" }
                     )
                 }
-            });
-        }
-        let guides = guides_text(&self.guides, scale, units);
-        if !guides.is_empty() {
-            lines.push(format!("Guides: {guides}"));
-        }
-        if detail == Detail::Compact {
-            return Some(format!("**Measured** ({}): {}", units.label(), lines.join("; ")));
-        }
-        let mut screen = format!("{} × {} pt, @{}x", n_pt(self.screen.width), n_pt(self.screen.height), n_pt(scale));
-        if let Some(name) = &self.screen.name {
-            screen = format!("{name}, {screen}");
-        }
-        let mut text = format!("**Measured** in {} (screen: {screen}):", units.label());
-        for line in lines {
-            text.push_str(&format!("\n- {line}"));
-        }
-        Some(text)
+            })
+            .collect()
     }
 
     /// One annotation, as its own block: `### N. what it's on` and what the agent needs to find
     /// and fix it, at the chosen detail.
-    /// Where every mark is, when they're all in the same app, window and page: said once (in
-    /// [`Inspection::context_markdown`]) instead of under each mark.
+    /// Where every annotation is, when they're all in the same app, window and page: said once (in
+    /// [`Inspection::context_markdown`]) instead of under each annotation.
     pub fn shared_context(&self) -> Option<(String, Option<String>, Option<String>)> {
         let mut places = self.annotations.iter().map(|a| {
             let e = a.element.as_ref()?;
@@ -609,7 +631,7 @@ impl Inspection {
         places.all(|p| p.as_ref() == Some(&first)).then_some(first)
     }
 
-    /// `**In:** Safari · "Settings" · http://localhost:3000/settings`, when all marks share it.
+    /// `**In:** Safari · "Settings" · http://localhost:3000/settings`, when all annotations share it.
     pub fn context_markdown(&self) -> Option<String> {
         let (app, window, url) = self.shared_context()?;
         let mut parts = vec![app];
@@ -624,6 +646,8 @@ impl Inspection {
         let title = annotation.title(scale, units);
         let element = annotation.element.clone().unwrap_or_default();
         let comment = annotation.comment.trim();
+        let said =
+            annotation.said.iter().map(|s| s.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
         // Said once for all of them.
         let shared = self.shared_context().is_some();
         if detail == Detail::Compact {
@@ -634,7 +658,7 @@ impl Inspection {
             if !comment.is_empty() {
                 line.push_str(&format!(": {comment}"));
             }
-            return line;
+            return with_said(&line, &said, detail);
         }
         let mut lines = vec![format!("### {}. {title}", annotation.number)];
         let mut field = |label: &str, value: String| lines.push(format!("**{label}:** {value}"));
@@ -716,7 +740,24 @@ impl Inspection {
         if !comment.is_empty() {
             lines.push(format!("**Feedback:** {comment}"));
         }
-        lines.join("\n")
+        with_said(&lines.join("\n"), &said, detail)
+    }
+}
+
+/// An annotation's block with what the user said about it (a verbatim transcript) added:
+/// `**Said:** …`, or at compact detail `(said: "…")` at the end of its line.
+pub fn with_said(block: &str, said: &str, detail: Detail) -> String {
+    let said = said.trim();
+    if said.is_empty() {
+        return block.to_string();
+    }
+    if detail == Detail::Compact {
+        return format!("{block} (said: \"{said}\")");
+    }
+    // A second recording continues the first.
+    match block.rsplit_once('\n').map_or(block, |(_, last)| last).starts_with("**Said:** ") {
+        true => format!("{block} {said}"),
+        false => format!("{block}\n**Said:** {said}"),
     }
 }
 
@@ -854,6 +895,7 @@ mod tests {
                 },
                 Measurement::Area { rect: PtRect::new(380.0, 200.0, 320.0, 48.0), snapped: true },
             ],
+            measurement_times: vec![1.0, 4.0],
             guides: vec![
                 Guide { axis: Axis::X, position: 700.0 },
                 Guide { axis: Axis::Y, position: 120.0 },
@@ -885,17 +927,22 @@ mod tests {
         let i = inspection();
         assert_eq!(
             i.measurements_markdown(Detail::Standard).unwrap(),
-            "**Measured** in pt (screen: Built-in Retina Display, 1512 × 982 pt, @2x):\n\
-             - Distance from (412, 230): 24 across (x 400 to x 424), 238.5 down (screen's top edge to y 238.5)\n\
-             - Area 320 × 48 (20:3) at (380, 200), snapped to the object inside\n\
-             - Guides: x 380 · x 700 (320 apart) · y 120"
+            "**Measured** in pt (screen: Built-in Retina Display, 1512 × 982 pt, @2x)\n\
+             **Guides:** x 380 · x 700 (320 apart) · y 120"
+        );
+        assert_eq!(
+            i.measurement_lines(),
+            [
+                "- Distance from (412, 230): 24 across (x 400 to x 424), 238.5 down (screen's top edge to y 238.5)",
+                "- Area 320 × 48 (20:3) at (380, 200), snapped to the object inside"
+            ]
         );
         let px = Inspection { units: Units::Px, ..inspection() };
         assert_eq!(
             px.measurements_markdown(Detail::Compact).unwrap(),
-            "**Measured** (px): Distance from (824, 460): 48 across (x 800 to x 848), 477 down (screen's top edge to y \
-             477); Area 640 × 96 (20:3) at (760, 400), snapped to the object inside; Guides: x 760 · x 1400 (640 apart) · y 240"
+            "**Measured** in px\n**Guides:** x 760 · x 1400 (640 apart) · y 240"
         );
+        assert_eq!(px.measurement_lines()[1], "- Area 640 × 96 (20:3) at (760, 400), snapped to the object inside");
         let nothing = Inspection { measurements: vec![], guides: vec![], ..inspection() };
         assert_eq!(nothing.measurements_markdown(Detail::Standard), None);
         assert_eq!(i.measurements[1].dimensions(2.0, Units::Px), "640 × 96");
@@ -905,7 +952,7 @@ mod tests {
     fn writes_annotations_at_each_detail_level() {
         let i = inspection();
         let a = &i.annotations[0];
-        // Every mark is in the same app, window and page: that's said once, not under each.
+        // Every annotation is in the same app, window and page: that's said once, not under each.
         assert_eq!(
             i.context_markdown().as_deref(),
             Some("**In:** Safari · \"Settings — Shop\" · http://localhost:3000/settings")
@@ -921,7 +968,7 @@ mod tests {
              **Intent:** fix · **Severity:** important\n\
              **Feedback:** Line it up with the fields."
         );
-        // Marks in different apps each say where they are.
+        // Annotations in different apps each say where they are.
         let mut finder = a.clone();
         finder.number = 2;
         finder.element = Some(Element { app: Some("Finder".into()), name: Some("row".into()), ..Element::default() });
@@ -955,6 +1002,20 @@ mod tests {
             "### 2. Area 100.5 × 40 at (5, 5)\n**Position:** 5, 5 (100.5 × 40 pt)"
         );
         assert_eq!(Annotation { at: (1.0, 2.0), ..Annotation::default() }.title(2.0, Units::Px), "Point (2, 4)");
+        // What was said about it, after what was typed; a later recording continues it.
+        let said = Annotation {
+            said: vec![Said { take: 4, text: " Make it bigger. ".into() }, Said { take: 6, text: "Much.".into() }],
+            ..a.clone()
+        };
+        assert!(
+            i.annotation_markdown(&said, Detail::Standard)
+                .ends_with("**Feedback:** Line it up with the fields.\n**Said:** Make it bigger. Much.")
+        );
+        assert_eq!(
+            i.annotation_markdown(&said, Detail::Compact),
+            "1. **button \"Save changes\"**: Line it up with the fields. (said: \"Make it bigger. Much.\")"
+        );
+        assert_eq!(with_said("### 3. row", "  ", Detail::Standard), "### 3. row");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! The overlay's windows: one per screen, borderless, above everything, showing the frozen screen
-//! and what's on it, with one toolbar for the four tools (Measure, Mark, Draw, Shot), the
+//! and what's on it, with one toolbar for the four tools (Measure, Annotate, Draw, Shot), the
 //! tolerance, the units, talking, copying, and adding it all to the aside.
 //!
 //! `Overlay` holds the session (`asides_core::overlay::Session`) and everything around it; each
@@ -12,14 +12,14 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use asides_core::config::OverlayKeys;
-use asides_core::helper::{Command, Event, Spec};
-use asides_core::inspect::{Axis, Element, Intent, Measurement, PtRect, Severity, Shape, num};
+use asides_core::helper::{Command, Event, Item, Spec, SpecScreen};
+use asides_core::inspect::{Annotation, Axis, Element, Intent, Measurement, PtRect, Said, Severity, Shape, num};
 use asides_core::keys::{self, Chord, Mods};
 use asides_core::measure::{Frame, Tolerance};
-use asides_core::overlay::{MARKER, Part, Placed, Session, Tool, lookups};
+use asides_core::overlay::{MARKER, Part, Placed, Saved, Session, Tool, lookups};
 use gpui::{
-    AnyElement, AnyWindowHandle, App, BorderStyle, Bounds, Context, CursorStyle, DispatchPhase, Entity, FocusHandle,
-    Focusable, FontWeight, Hitbox, HitboxBehavior, Hsla, ImageSource, KeyDownEvent, KeyUpEvent, Modifiers,
+    AnyElement, AnyWindowHandle, App, BorderStyle, Bounds, Context, CursorStyle, DispatchPhase, Div, Entity,
+    FocusHandle, Focusable, FontWeight, Hitbox, HitboxBehavior, Hsla, ImageSource, KeyDownEvent, KeyUpEvent, Modifiers,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point,
     Render, RenderImage, Rgba, SharedString, Window, canvas, deferred, div, img, point, prelude::*, px, quad, size,
     svg, transparent_black,
@@ -27,16 +27,29 @@ use gpui::{
 
 use crate::export::{self, Exporter};
 use crate::input::TextInput;
+use crate::windows::TOOLBAR_LIFT;
 use crate::{finish, io, style};
 
 /// How often the overlay looks at the app's commands, the clock and the hover.
 const TICK: Duration = Duration::from_millis(33);
-/// Mark tool: how long the cursor rests before the element under it is looked up.
+/// ...and, while the frozen screens give way, whether the system is back with the user's app.
+const HANDOFF_TICK: Duration = Duration::from_millis(8);
+/// Annotate: how long the cursor rests before the element under it is looked up.
 const HOVER_REST: Duration = Duration::from_millis(90);
 const TOAST: Duration = Duration::from_millis(1600);
+/// A recording about an annotation ended: shown as being transcribed this long at most, until the
+/// app says it is (it doesn't for one too short to keep).
+const AWAIT_TRANSCRIPT: Duration = Duration::from_millis(1500);
+/// Esc pressed again within this closes without adding anything.
+const CLOSE_AGAIN: Duration = Duration::from_millis(2500);
+/// In a card, Space held this long talks about its annotation; shorter, it types a space.
+const SPACE_HOLD: Duration = Duration::from_millis(300);
 const NOTICE: Duration = Duration::from_millis(5000);
-const CARD_WIDTH: f64 = 380.0;
-const CARD_HEIGHT: f64 = 46.0;
+const CARD_WIDTH: f64 = 440.0;
+/// The card's trash button and the gap before it.
+const TRASH_WIDTH: f64 = 34.0;
+/// The card opens above its annotation when there's less than this below it.
+const CARD_ROOM: f64 = 240.0;
 const MENU_WIDTH: f64 = 260.0;
 
 /// A screen's window: where it is and what part of the screen it shows (all of it, unless
@@ -44,6 +57,8 @@ const MENU_WIDTH: f64 = 260.0;
 pub struct ScreenWindow {
     pub handle: Option<AnyWindowHandle>,
     pub focus: Option<FocusHandle>,
+    /// The screen it's on (AppKit's coordinates).
+    pub screen: PtRect,
     /// The screen point at the window's top-left corner.
     pub offset: (f64, f64),
     pub size: (f64, f64),
@@ -76,6 +91,7 @@ enum Cmd {
     Done,
     DoneWhole,
     Send,
+    Live,
     Close,
 }
 
@@ -91,7 +107,7 @@ impl Keys {
         Keys {
             list: vec![
                 (p(&k.measure), Cmd::Tool(Tool::Measure)),
-                (p(&k.mark), Cmd::Tool(Tool::Mark)),
+                (p(&k.annotate), Cmd::Tool(Tool::Annotate)),
                 (p(&k.draw), Cmd::Tool(Tool::Draw)),
                 (p(&k.shot), Cmd::Tool(Tool::Shot)),
                 (p(&k.guide_horizontal), Cmd::GuideH),
@@ -114,6 +130,7 @@ impl Keys {
                 (p(&k.send), Cmd::Send),
                 (p(&k.done_whole_screen), Cmd::DoneWhole),
                 (p(&k.done), Cmd::Done),
+                (p(&k.live), Cmd::Live),
                 (p(&k.close), Cmd::Close),
             ],
             talk: p(&k.talk),
@@ -133,6 +150,8 @@ struct Card {
     screen: usize,
     index: usize,
     number: u32,
+    /// The annotation's key: what's recorded while the card is open is about it.
+    key: u32,
     input: Entity<TextInput>,
     intent: Option<Intent>,
     severity: Option<Severity>,
@@ -142,10 +161,12 @@ struct Card {
 enum MenuItem {
     Cmd(Cmd),
     Tool(Tool),
-    RemoveMark(usize),
+    RemoveAnnotation(usize),
     RemoveHeld(usize),
+    AnnotateHeld(usize),
+    AnnotateHere,
     ShotOfHeld(usize),
-    EditMark(usize),
+    EditAnnotation(usize),
 }
 
 struct Menu {
@@ -158,7 +179,7 @@ struct Menu {
 
 #[derive(Clone, Copy, Debug)]
 enum Lookup {
-    Mark { screen: usize, index: usize, number: u32, part: Part },
+    Annotation { screen: usize, index: usize, number: u32, part: Part },
     Hover { screen: usize },
 }
 
@@ -166,6 +187,18 @@ struct Hovered {
     screen: usize,
     frame: PtRect,
     name: String,
+}
+
+/// A freeze's work, for the aside: drawing its images takes a moment, done once the live screen
+/// shows.
+struct Keeping {
+    session: Session,
+    frames: Vec<Frame>,
+    exporter: Option<Exporter>,
+    shots: Vec<(f32, String)>,
+    /// Which freeze it was, and the screen under the pointer.
+    freeze: usize,
+    screen: usize,
 }
 
 pub struct Overlay {
@@ -190,8 +223,15 @@ pub struct Overlay {
     toolbar: bool,
     /// Seconds recorded when the app last said so, and when it did.
     recording: Option<(f32, Instant)>,
+    /// The annotation that recording is about (started from its card).
+    recording_for: Option<u32>,
+    /// Recordings about annotations being transcribed: (annotation key, take).
+    transcribing: Vec<(u32, u64)>,
+    /// A recording about this annotation just ended, and when (until the app says it's being
+    /// transcribed): the card shows it as such, without a gap.
+    awaiting: Option<(u32, Instant)>,
     shown_seconds: u32,
-    /// Where the cursor last moved and when, for the Mark tool's hover lookup.
+    /// Where the cursor last moved and when, for Annotate's hover lookup.
     rested: Option<(usize, f64, f64, Instant)>,
     hover_asked: Option<(usize, f64, f64)>,
     hovered: Option<Hovered>,
@@ -204,8 +244,59 @@ pub struct Overlay {
     card_tip: Option<SharedString>,
     /// Screenshots taken: when, and the file in the session directory.
     shots: Vec<(f32, String)>,
+    shot_count: usize,
     commands: Receiver<Command>,
     done: bool,
+    /// Over the live screen: only the toolbar shows, in a window of its own, and the user's apps
+    /// take the mouse and the keyboard. Frozen, the screens show, and take them.
+    pub live: bool,
+    /// The app was asked to freeze the screens, and the tool to pick then.
+    freezing: Option<Option<Tool>>,
+    /// The toolbar's window over the live screen, and the screen it's on.
+    pub toolbar_window: Option<ScreenWindow>,
+    pub toolbar_screen: usize,
+    /// Which windows show: the toolbar's (`Some(true)`, live) or the screens' (`Some(false)`).
+    pub shown: Option<bool>,
+    /// Where the user put the toolbar (its top-left corner, as a fraction of the screen), and
+    /// folded to its handle and microphone.
+    pub toolbar_at: Option<(f64, f64)>,
+    pub collapsed: bool,
+    /// The toolbar's bounds in its window, as last drawn: on a frozen screen, and over the live one.
+    pub toolbar_bounds: Option<Bounds<Pixels>>,
+    pub live_toolbar_bounds: Option<Bounds<Pixels>>,
+    /// The toolbar being moved: where it was grabbed, from its top-left corner.
+    pub moving_toolbar: Option<(f64, f64)>,
+    /// The keys still to show, the first time a screen freezes.
+    tips: bool,
+    /// Space down in a card: since when, and whether it's talking yet (`SPACE_HOLD`).
+    space_hold: Option<(Instant, bool)>,
+    /// Something was said in the session (there's something to lose by closing it).
+    talked: bool,
+    /// Esc pressed once, with something to lose: when.
+    close_armed: Option<Instant>,
+    /// What earlier freezes add to the aside, and how many there were.
+    kept: Vec<Item>,
+    freezes: usize,
+    /// The last freeze, still to be kept (`Keeping`).
+    keeping: Option<Keeping>,
+    /// The last freeze's guides and held measurements, for next time.
+    saved: Saved,
+    /// The app the user was in when the screens froze, for the keyboard to go back to.
+    pub previous_app: Option<i32>,
+    /// The last freeze's screens, to drop from the windows once the new ones are drawn.
+    pub stale_images: Vec<Arc<RenderImage>>,
+    /// The part of each screen the Dock and the menu bar leave (AppKit's coordinates), measured
+    /// over the live screen: the toolbar sits as high above the Dock, frozen or live, and the frozen
+    /// screens give way once they're back (`windows::Handoff`).
+    pub visible: Vec<PtRect>,
+    /// The frozen screens are giving way (to the live screen, or closing): the system goes back to
+    /// the app the user was in first.
+    pub handoff: Option<crate::windows::Handoff>,
+    /// Done or closed while frozen: the overlay quits once it has handed the system back.
+    pub closing: bool,
+    /// The frozen screens just showed: the system is the overlay's once they're on screen (taken
+    /// at once, the menu bar hid a frame before they covered it), and since when.
+    pub taking_over: Option<Instant>,
 }
 
 impl Overlay {
@@ -214,7 +305,10 @@ impl Overlay {
             spec.screens.iter().zip(&frames).map(|(s, f)| Session::screen(s.screen.clone(), f.clone())).collect();
         let mut session = Session::new(screens, Tolerance(spec.tolerance.min(100)), spec.units);
         session.tool = Tool::Measure;
+        // Opened over the live screen, there are no frozen screens yet.
+        session.cursor = pointer(&spec).filter(|_| !spec.live);
         let images = frames.iter().map(render_image).collect();
+        let visible = visible_frames(&spec.screens);
         let accent = style::rgb_hex(style::parse_color(&spec.color));
         let recording = spec.recording.map(|s| (s, Instant::now()));
         Overlay {
@@ -230,10 +324,13 @@ impl Overlay {
             card: None,
             menu: None,
             toast: None,
-            help: spec.tips,
+            help: spec.tips && !spec.live,
             help_hover: false,
             toolbar: spec.toolbar,
             recording,
+            recording_for: None,
+            transcribing: Vec::new(),
+            awaiting: None,
             shown_seconds: 0,
             rested: None,
             hover_asked: None,
@@ -244,10 +341,154 @@ impl Overlay {
             hint: None,
             card_tip: None,
             shots: Vec::new(),
+            shot_count: 0,
             commands,
             done: false,
+            live: spec.live,
+            freezing: None,
+            toolbar_window: None,
+            toolbar_screen: 0,
+            shown: None,
+            toolbar_at: spec.toolbar_at,
+            collapsed: spec.toolbar_collapsed,
+            toolbar_bounds: None,
+            live_toolbar_bounds: None,
+            moving_toolbar: None,
+            tips: spec.tips && spec.live,
+            space_hold: None,
+            talked: spec.recording.is_some(),
+            close_armed: None,
+            kept: Vec::new(),
+            freezes: 0,
+            keeping: None,
+            saved: Saved::default(),
+            previous_app: None,
+            stale_images: Vec::new(),
+            visible,
+            handoff: None,
+            closing: false,
+            taking_over: None,
             spec,
         }
+    }
+
+    pub fn spec(&self) -> &Spec {
+        &self.spec
+    }
+
+    // --- Live and frozen ---
+
+    /// Freezes the screens to work on them (the app captures them), picking `tool` then.
+    pub fn freeze(&mut self, tool: Option<Tool>) {
+        if !self.live {
+            if let Some(tool) = tool {
+                self.session.set_tool(tool);
+            }
+            return;
+        }
+        if self.freezing.is_none() {
+            io::emit(&Event::Freeze);
+        }
+        self.freezing = Some(tool.or(self.freezing.flatten()));
+    }
+
+    /// The screens, frozen: the work goes on on them, numbered on from the last freeze.
+    fn frozen(&mut self, screens: Vec<SpecScreen>) {
+        self.keep_last();
+        let tool = self.freezing.take().flatten();
+        let mut frames = Vec::new();
+        for s in &screens {
+            match std::fs::read(self.dir.join(&s.pixels)) {
+                Ok(rgba) if rgba.len() >= (s.width * s.height * 4) as usize => {
+                    frames.push(Frame { width: s.width, height: s.height, rgba })
+                }
+                _ => return self.notice("Could not freeze the screen."),
+            }
+        }
+        let states = screens.iter().zip(&frames).map(|(s, f)| Session::screen(s.screen.clone(), f.clone())).collect();
+        self.session = self.session.refrozen(states);
+        if let Some(tool) = tool {
+            self.session.set_tool(tool);
+        }
+        let images = frames.iter().map(render_image).collect();
+        self.stale_images.extend(std::mem::replace(&mut self.images, images));
+        self.frames = frames;
+        self.exporter = None;
+        // Over the live screen still: the Dock is where the user keeps it.
+        self.visible = visible_frames(&screens);
+        self.spec.screens = screens;
+        // Measure's lines start where the pointer is, not where it was when the screen last froze.
+        self.session.cursor = pointer(&self.spec);
+        (self.rested, self.hover_asked) = (None, None);
+        self.live = false;
+        self.help = std::mem::take(&mut self.tips);
+        self.hint = None;
+        self.set_hovered(None);
+    }
+
+    /// Back to the live screen: what was done on the frozen one goes in the aside, in order (once
+    /// the live screen shows: `keep_last`).
+    fn go_live(&mut self, cx: &mut Context<Self>) {
+        if self.live || self.done {
+            return;
+        }
+        self.put_card_away(cx);
+        (self.menu, self.help, self.hint) = (None, false, None);
+        self.keeping = Some(self.this_freeze());
+        self.live = true;
+        io::emit(&Event::Live);
+    }
+
+    /// This freeze's work, taken to be kept.
+    fn this_freeze(&mut self) -> Keeping {
+        let keeping = Keeping {
+            session: self.session.clone(),
+            frames: std::mem::take(&mut self.frames),
+            exporter: self.exporter.take(),
+            shots: std::mem::take(&mut self.shots),
+            freeze: self.freezes,
+            screen: self.cursor_screen(),
+        };
+        self.saved = keeping.session.saved();
+        self.freezes += 1;
+        keeping
+    }
+
+    /// The last freeze, kept for the aside if it isn't yet.
+    fn keep_last(&mut self) {
+        if let Some(keeping) = self.keeping.take()
+            && let Err(err) = self.keep(keeping, false, false)
+        {
+            eprintln!("could not keep the frozen screen: {err:#}");
+        }
+    }
+
+    /// What was done on a freeze, kept for the aside (`alone`: the screen even with nothing on it;
+    /// `whole`: all of it, not just around what's there).
+    fn keep(&mut self, k: Keeping, alone: bool, whole: bool) -> anyhow::Result<()> {
+        if k.session.inspections().is_empty() && k.shots.is_empty() && !alone {
+            return Ok(());
+        }
+        let exporter = k.exporter.unwrap_or_else(|| {
+            let frames: Vec<&Frame> = k.frames.iter().collect();
+            Exporter::new(&frames, style::parse_color(&self.spec.color))
+        });
+        let items =
+            finish::items(&k.session, &exporter, &self.spec, &self.dir, whole, &k.shots, k.screen, k.freeze, alone)?;
+        self.kept.extend(items);
+        Ok(())
+    }
+
+    /// The toolbar's handle, pressed at `at` (in its window): it follows the pointer until let go.
+    fn grab_toolbar(&mut self, at: Point<Pixels>, live: bool) {
+        let bounds = if live { self.live_toolbar_bounds } else { self.toolbar_bounds };
+        let origin = bounds.map_or(at, |b| b.origin);
+        self.moving_toolbar = Some((f64::from(f32::from(at.x - origin.x)), f64::from(f32::from(at.y - origin.y))));
+    }
+
+    /// The moved or folded toolbar, remembered for next time.
+    pub fn placed_toolbar(&mut self) {
+        io::emit(&Event::ToolbarPlaced { at: self.toolbar_at, collapsed: self.collapsed });
     }
 
     pub fn start(&mut self) {
@@ -289,10 +530,13 @@ impl Overlay {
         false
     }
 
+    /// Measure's modifiers. With ⌃ down, they're part of one of Asides' shortcuts (⌃⌥P, ⌃⌥Space),
+    /// not for Measure: its lines don't change while it's pressed.
     fn set_modifiers(&mut self, m: &Modifiers) {
-        self.session.crosshair = m.shift;
-        self.session.snapping = !m.platform;
-        self.session.alternate = m.alt;
+        let measure = !m.control;
+        self.session.crosshair = m.shift && measure;
+        self.session.snapping = !(m.platform && measure);
+        self.session.alternate = m.alt && measure;
     }
 
     // --- Mouse ---
@@ -306,17 +550,20 @@ impl Overlay {
         cx: &mut Context<Self>,
     ) {
         crate::native::debug(&format!("mouse down at {x},{y}"));
-        if self.done {
+        // Live, the frozen screens are only still up while they give way: what's done is kept.
+        if self.done || self.live {
             return;
         }
+        self.session.clock = self.elapsed();
         self.set_modifiers(&e.modifiers);
         if self.menu.take().is_some() || self.help {
             self.help = false;
             return cx.notify();
         }
+        // Closing the card, the click goes on: to the next annotation, or whatever it's on. What
+        // was said about this one is still being transcribed meanwhile, for it.
         if self.card.is_some() {
-            self.close_card(true, window, cx);
-            return cx.notify();
+            self.close_card(window, cx);
         }
         // Control-click is a right-click.
         let right = e.button == MouseButton::Right || (e.button == MouseButton::Left && e.modifiers.control);
@@ -332,10 +579,15 @@ impl Overlay {
             return;
         }
         self.set_modifiers(&e.modifiers);
+        if let Some((gx, gy)) = self.moving_toolbar {
+            let s = &self.spec.screens[screen].screen;
+            self.toolbar_at = Some((((x - gx) / s.width).clamp(0.0, 1.0), ((y - gy) / s.height).clamp(0.0, 1.0)));
+            return cx.notify();
+        }
         self.session.move_to(screen, x, y);
         self.rested = Some((screen, x, y, Instant::now()));
         if self.hovered.as_ref().is_some_and(|h| h.screen != screen || !h.frame.contains(x, y)) {
-            self.hovered = None;
+            self.set_hovered(None);
         }
         cx.notify();
     }
@@ -348,7 +600,11 @@ impl Overlay {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.done || self.session.drag.is_none() {
+        if self.moving_toolbar.take().is_some() {
+            self.placed_toolbar();
+            return cx.notify();
+        }
+        if self.done || self.live || self.session.drag.is_none() {
             return;
         }
         self.set_modifiers(&e.modifiers);
@@ -373,9 +629,10 @@ impl Overlay {
         match placed {
             Placed::Annotation { screen, index } => {
                 self.look_up(screen, index);
-                // While the user talks, a mark is enough: what they say goes with it. Drawings
+                // While the user talks, an annotation is enough: what they say goes with it. Drawings
                 // come in quick strokes: their card opens on a click on their number.
-                if self.recording.is_none() && self.session.tool == Tool::Mark {
+                let drawing = self.session.screens[screen].annotations.get(index).is_some_and(|a| a.shape.is_some());
+                if self.recording.is_none() && !drawing {
                     self.open_card(screen, index, window, cx);
                 }
             }
@@ -385,14 +642,14 @@ impl Overlay {
         }
     }
 
-    /// Asks the app what a new mark is on.
+    /// Asks the app what a new annotation is on.
     fn look_up(&mut self, screen: usize, index: usize) {
         let Some(a) = self.session.screens[screen].annotations.get(index) else { return };
         let (ox, oy) = self.spec.screens[screen].origin;
         for (part, x, y) in lookups(a) {
             let id = self.next_id;
             self.next_id += 1;
-            self.pending.insert(id, Lookup::Mark { screen, index, number: a.number, part });
+            self.pending.insert(id, Lookup::Annotation { screen, index, number: a.number, part });
             io::emit(&Event::Identify { id, x: ox + x, y: oy + y });
         }
     }
@@ -403,7 +660,8 @@ impl Overlay {
         // Full size on the clipboard; for the aside, no larger than the agent reads.
         let Some(png) = self.exporter().render(&session, screen, rect) else { return };
         let small = self.exporter().render_within(&session, screen, rect, export::ASIDE_MAX_SIDE);
-        let name = format!("shot-{}.png", self.shots.len() + 1);
+        self.shot_count += 1;
+        let name = format!("shot-{}.png", self.shot_count);
         if std::fs::write(self.dir.join(&name), small.as_deref().unwrap_or(&png)).is_ok() {
             self.shots.push((time, name));
         }
@@ -421,14 +679,21 @@ impl Overlay {
     fn open_menu(&mut self, screen: usize, x: f64, y: f64) {
         let k = |c: Cmd| self.keys.label(c);
         let mut items = Vec::new();
-        if let Some(index) = self.session.marker_at(screen, x, y) {
+        let marker = self.session.marker_at(screen, x, y);
+        if let Some(index) = marker {
             let number = self.session.screens[screen].annotations[index].number;
-            items.push((format!("Edit Mark {number}"), String::new(), MenuItem::EditMark(index)));
-            items.push((format!("Remove Mark {number}"), String::new(), MenuItem::RemoveMark(index)));
+            items.push((format!("Edit Annotation {number}"), String::new(), MenuItem::EditAnnotation(index)));
+            items.push((format!("Remove Annotation {number}"), String::new(), MenuItem::RemoveAnnotation(index)));
         }
-        if let Some(index) = self.session.held_at(screen, x, y) {
-            items.push(("Screenshot of This".into(), String::new(), MenuItem::ShotOfHeld(index)));
-            items.push(("Remove This Measurement".into(), String::new(), MenuItem::RemoveHeld(index)));
+        // On a measured section, annotating means that section; elsewhere, what's under the pointer.
+        match self.session.held_at(screen, x, y) {
+            Some(index) => items.extend([
+                ("Annotate This".to_string(), String::new(), MenuItem::AnnotateHeld(index)),
+                ("Screenshot of This".into(), String::new(), MenuItem::ShotOfHeld(index)),
+                ("Remove This Measurement".into(), String::new(), MenuItem::RemoveHeld(index)),
+            ]),
+            None if marker.is_none() => items.push(("Annotate Here".into(), String::new(), MenuItem::AnnotateHere)),
+            None => {}
         }
         items.extend([
             ("Add Horizontal Guide".to_string(), k(Cmd::GuideH), MenuItem::Cmd(Cmd::GuideH)),
@@ -444,15 +709,24 @@ impl Overlay {
     fn menu_item(&mut self, item: MenuItem, window: &mut Window, cx: &mut Context<Self>) {
         let Some(menu) = self.menu.take() else { return };
         let (screen, (x, y)) = (menu.screen, menu.at);
+        self.session.clock = self.elapsed();
         // Guides and holds go where the menu was opened.
         self.session.move_to(screen, x, y);
         match item {
             MenuItem::Cmd(cmd) => self.command(cmd, window, cx),
             MenuItem::Tool(tool) => self.session.set_tool(tool),
-            MenuItem::RemoveMark(index) => self.session.remove_annotation(screen, index),
+            MenuItem::RemoveAnnotation(index) => self.session.remove_annotation(screen, index),
             MenuItem::RemoveHeld(index) => self.session.remove_held(screen, index),
-            MenuItem::EditMark(index) => self.open_card(screen, index, window, cx),
+            MenuItem::EditAnnotation(index) => self.open_card(screen, index, window, cx),
             MenuItem::ShotOfHeld(index) => self.shot_of_held(screen, index),
+            MenuItem::AnnotateHeld(index) => {
+                let placed = self.session.annotate_held(screen, index, self.elapsed());
+                self.placed(placed, window, cx);
+            }
+            MenuItem::AnnotateHere => {
+                let placed = self.session.annotate_at(screen, x, y, self.elapsed());
+                self.placed(placed, window, cx);
+            }
         }
         cx.notify();
     }
@@ -464,48 +738,91 @@ impl Overlay {
         }
     }
 
-    // --- The card (a mark's typed feedback) ---
+    // --- The card (an annotation's feedback) ---
 
     fn open_card(&mut self, screen: usize, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(a) = self.session.screens[screen].annotations.get(index) else { return };
-        let (comment, number, intent, severity) = (a.comment.clone(), a.number, a.intent, a.severity);
+        let (comment, number, key, intent, severity) = (a.comment.clone(), a.number, a.key, a.intent, a.severity);
         let input = cx.new(|cx| TextInput::new(&comment, "What should change?", cx));
         // The card opens where the click was: `window` is that screen's.
         window.focus(&input.read(cx).focus_handle(cx));
-        self.card = Some(Card { screen, index, number, input, intent, severity });
+        self.card = Some(Card { screen, index, number, key, input, intent, severity });
     }
 
-    fn close_card(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(card) = self.card.take() else { return };
+    /// Closes the card, keeping what was typed; the annotation stays, and a click on its number
+    /// opens the card again. A recording for it ends with it.
+    fn close_card(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(screen) = self.put_card_away(cx) else { return };
+        if let Some(focus) = self.windows.get(screen).and_then(|w| w.focus.clone()) {
+            window.focus(&focus);
+        }
+    }
+
+    /// The card closed (see `close_card`); the screen it was on.
+    fn put_card_away(&mut self, cx: &mut Context<Self>) -> Option<usize> {
+        let card = self.card.take()?;
         let still_there =
             self.session.screens[card.screen].annotations.get(card.index).is_some_and(|a| a.number == card.number);
-        if save && still_there {
+        if still_there {
             let text = card.input.read(cx).text();
             self.session.set_feedback(card.screen, card.index, &text, card.intent, card.severity);
         }
-        if let Some(focus) = self.windows.get(card.screen).and_then(|w| w.focus.clone()) {
-            window.focus(&focus);
+        if self.recording.is_some() && self.recording_for == Some(card.key) {
+            io::emit(&Event::Stop);
+            // Stopped: the next annotation's card opens right away.
+            (self.talking, self.recording, self.recording_for) = (false, None, None);
         }
+        Some(card.screen)
+    }
+
+    fn annotation(&mut self, key: u32) -> Option<&mut Annotation> {
+        self.session.screens.iter_mut().flat_map(|s| s.annotations.iter_mut()).find(|a| a.key == key)
+    }
+
+    /// The card's trash: what was said about the annotation goes, to say it again; still being said,
+    /// that recording goes too.
+    fn unsay(&mut self, key: u32) {
+        if let Some(a) = self.annotation(key) {
+            a.said.clear();
+        }
+        self.transcribing.retain(|&(k, _)| k != key);
+        self.awaiting = self.awaiting.filter(|&(k, _)| k != key);
+        if self.recording_for == Some(key) {
+            (self.talking, self.recording, self.recording_for) = (false, None, None);
+        }
+        io::emit(&Event::Unsay { annotation: key });
     }
 
     // --- Keys ---
 
     fn key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         crate::native::debug(&format!("key down {:?} card={}", e.keystroke, self.card.is_some()));
-        if self.done {
+        if self.done || self.live {
             return;
         }
         let key = keys::normalize(&e.keystroke.key);
         let m = &e.keystroke.modifiers;
         let mods = Mods { cmd: m.platform, shift: m.shift, alt: m.alt, ctrl: m.control };
+        self.session.clock = self.elapsed();
         if self.card.is_some() {
-            // ⌘1–⌘4: what the mark asks for (the card's dots).
+            // Space held talks about the annotation; tapped, it's a space (typed when it's let go,
+            // or when the next key comes first).
+            let plain = !m.platform && !m.alt && !m.control;
+            if key == "space" && plain && (self.space_hold.is_some() || self.recording.is_none()) {
+                if !e.is_held && self.space_hold.is_none() {
+                    self.space_hold = Some((Instant::now(), false));
+                }
+                cx.stop_propagation();
+                return;
+            }
+            self.type_held_space(cx);
+            // ⌘1–⌘4: what the annotation asks for (the card's dots).
             let intent = (m.platform && !m.shift && !m.alt)
                 .then(|| key.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|i| Intent::ALL.get(i)))
                 .flatten();
             match key.as_str() {
-                "escape" => self.close_card(false, window, cx),
-                "enter" if !m.shift => self.close_card(true, window, cx),
+                "escape" => self.close_card(window, cx),
+                "enter" if !m.shift => self.close_card(window, cx),
                 _ if intent.is_some() => self.choose_intent(*intent.unwrap()),
                 _ => return,
             }
@@ -525,7 +842,7 @@ impl Overlay {
         if keys::matches(&self.keys.talk, &key, mods) {
             if !e.is_held && !self.talking && !self.unbound() {
                 self.talking = true;
-                io::emit(&Event::Talk { down: true });
+                io::emit(&Event::Talk { down: true, annotation: None });
             }
             return cx.notify();
         }
@@ -536,19 +853,34 @@ impl Overlay {
         }
         if let Some(cmd) = self.keys.command(&key, mods) {
             self.help = self.help && cmd == Cmd::Help;
-            self.command(cmd, window, cx);
+            match cmd {
+                Cmd::Close => self.close_by_key(cx),
+                _ => self.command(cmd, window, cx),
+            }
             cx.notify();
         }
     }
 
     fn key_up(&mut self, e: &KeyUpEvent, cx: &mut Context<Self>) {
         let key = keys::normalize(&e.keystroke.key);
+        if key == "space"
+            && let Some((_, talking)) = self.space_hold
+        {
+            if talking {
+                self.space_hold = None;
+                self.talking = false;
+                io::emit(&Event::Stop);
+            } else {
+                self.type_held_space(cx);
+            }
+            return cx.notify();
+        }
         if key == "space" {
             self.session.moving = false;
         }
         if self.talking && self.keys.talk.iter().any(|c| c.key == key) {
             self.talking = false;
-            io::emit(&Event::Talk { down: false });
+            io::emit(&Event::Talk { down: false, annotation: None });
         }
         cx.notify();
     }
@@ -558,7 +890,7 @@ impl Overlay {
         match cmd {
             Cmd::Tool(tool) => {
                 s.set_tool(tool);
-                self.hovered = None;
+                self.set_hovered(None);
             }
             Cmd::HoldH => drop(s.hold_axis(Axis::X)),
             Cmd::HoldV => drop(s.hold_axis(Axis::Y)),
@@ -628,17 +960,40 @@ impl Overlay {
             Cmd::DoneWhole => self.finish(true, false, window, cx),
             // Without batches, agents get the aside once it's written anyway.
             Cmd::Send => self.finish(false, self.spec.batch, window, cx),
+            Cmd::Live => self.go_live(cx),
             Cmd::Close => self.cancel(cx),
         }
     }
 
+    /// A microphone: with the card open, what's said is about its annotation.
     fn talk_button(&mut self, down: bool) {
         if down && !self.talking && self.unbound() {
             return;
         }
         if down != self.talking {
             self.talking = down;
-            io::emit(&Event::Talk { down });
+            let annotation = self.card.as_ref().map(|c| c.key);
+            io::emit(&Event::Talk { down, annotation });
+        }
+    }
+
+    /// Space, down in a card but not held long enough to talk: a space after all.
+    fn type_held_space(&mut self, cx: &mut Context<Self>) {
+        if let Some((_, false)) = self.space_hold.take()
+            && let Some(card) = &self.card
+        {
+            card.input.update(cx, |input, cx| input.insert(" ", cx));
+        }
+    }
+
+    /// Space held in a card long enough: talking about its annotation until it's let go.
+    fn space_talks(&mut self) {
+        let Some((since, false)) = self.space_hold else { return };
+        let Some(key) = self.card.as_ref().map(|c| c.key) else { return };
+        if since.elapsed() >= SPACE_HOLD && self.recording.is_none() && !self.unbound() {
+            self.space_hold = Some((since, true));
+            self.talking = true;
+            io::emit(&Event::Talk { down: true, annotation: Some(key) });
         }
     }
 
@@ -655,7 +1010,7 @@ impl Overlay {
         if self.done {
             return;
         }
-        self.close_card(true, window, cx);
+        self.close_card(window, cx);
         self.finish_now(whole, send, cx);
     }
 
@@ -669,20 +1024,44 @@ impl Overlay {
         }
         self.done = true;
         if self.talking {
-            io::emit(&Event::Talk { down: false });
+            io::emit(&Event::Talk { down: false, annotation: None });
         }
-        let screen = self.cursor_screen();
-        let session = self.session.clone();
-        let (spec, dir, shots) = (self.spec.clone(), self.dir.clone(), self.shots.clone());
-        let outcome = finish::outcome(&session, self.exporter(), &spec, &dir, whole, &shots, screen, send);
-        match outcome.and_then(|o| finish::write(&dir, &o)) {
+        self.keep_last();
+        // A frozen screen with nothing on it, and nothing before: the screen, like a screenshot.
+        let kept = match self.live {
+            true => Ok(()),
+            false => {
+                let alone = self.kept.is_empty();
+                let keeping = self.this_freeze();
+                self.keep(keeping, alone, whole)
+            }
+        };
+        let outcome = finish::outcome(std::mem::take(&mut self.kept), self.saved.clone(), send);
+        match kept.and_then(|()| finish::write(&self.dir, &outcome)) {
             Ok(()) => io::emit(&Event::Finished),
             Err(err) => {
                 eprintln!("could not write the result: {err:#}");
-                io::emit(&Event::Cancelled { saved: self.session.saved() });
+                io::emit(&Event::Cancelled { saved: self.saved_now() });
             }
         }
-        cx.quit();
+        self.quit(cx);
+    }
+
+    /// Closes the overlay; frozen, once the system is back with the app the user was in
+    /// (`windows::sync`), so that app shows as it was, not as an app in the background.
+    fn quit(&mut self, cx: &mut Context<Self>) {
+        match self.live {
+            true => cx.quit(),
+            false => self.closing = true,
+        }
+    }
+
+    /// How far above the screen's bottom edge its visible part starts (the Dock, when it shows).
+    pub fn lift(&self, screen: usize) -> f64 {
+        match (self.visible.get(screen), self.spec.screens.get(screen)) {
+            (Some(v), Some(s)) => (v.y - s.frame.y).max(0.0),
+            _ => 0.0,
+        }
     }
 
     fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -691,10 +1070,31 @@ impl Overlay {
         }
         self.done = true;
         if self.talking {
-            io::emit(&Event::Talk { down: false });
+            io::emit(&Event::Talk { down: false, annotation: None });
         }
-        io::emit(&Event::Cancelled { saved: self.session.saved() });
-        cx.quit();
+        io::emit(&Event::Cancelled { saved: self.saved_now() });
+        self.quit(cx);
+    }
+
+    /// Esc: closes without adding anything, at once with nothing to lose, otherwise on a second
+    /// press within `CLOSE_AGAIN`.
+    fn close_by_key(&mut self, cx: &mut Context<Self>) {
+        let armed = self.close_armed.is_some_and(|at| at.elapsed() < CLOSE_AGAIN);
+        let work = !self.session.is_empty()
+            || !self.kept.is_empty()
+            || !self.shots.is_empty()
+            || self.talked
+            || self.recording.is_some();
+        if armed || !work {
+            return self.cancel(cx);
+        }
+        self.close_armed = Some(Instant::now());
+        self.toast(format!("{} again closes without adding anything", self.keys.label(Cmd::Close)));
+    }
+
+    /// The guides and held measurements to restore next time: the frozen screen's, or the last's.
+    fn saved_now(&self) -> Saved {
+        if self.live { self.saved.clone() } else { self.session.saved() }
     }
 
     // --- The clock: the app's commands, toasts, the recording's time, the hover lookup ---
@@ -716,6 +1116,17 @@ impl Overlay {
             changed = true;
         }
         self.hover_lookup();
+        if self.space_hold.is_some_and(|(_, talking)| !talking) {
+            self.space_talks();
+            changed = true;
+        }
+        if self.awaiting.is_some_and(|(_, at)| at.elapsed() >= AWAIT_TRANSCRIPT) {
+            self.awaiting = None;
+            changed = true;
+        }
+        if self.shown == Some(true) {
+            self.keep_last();
+        }
         if changed {
             cx.notify();
         }
@@ -724,8 +1135,36 @@ impl Overlay {
     pub fn apply_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
             Command::Element { id, element } => self.identified(id, element.map(|e| *e)),
-            Command::Recording { seconds } => self.recording = seconds.map(|s| (s, Instant::now())),
+            Command::Recording { seconds, annotation } => {
+                // What was said waits for Done, with the annotations: say so as it stops. What was
+                // said about an annotation shows in its card.
+                if self.recording.is_some() && self.recording_for.is_none() && seconds.is_none() && !self.done {
+                    self.toast(format!("Kept for the aside · {} adds it", self.keys.label(Cmd::Done)));
+                }
+                if let (Some(key), None) = (self.recording_for, seconds) {
+                    self.awaiting = Some((key, Instant::now()));
+                }
+                self.recording = seconds.map(|s| (s, Instant::now()));
+                self.recording_for = seconds.and(annotation);
+                self.talked |= seconds.is_some();
+            }
+            Command::Transcribing { annotation, take } => {
+                self.awaiting = self.awaiting.filter(|&(key, _)| key != annotation);
+                self.transcribing.push((annotation, take));
+            }
+            Command::Said { annotation, take, text } => {
+                // Unless it was thrown away meanwhile.
+                if let Some(i) = self.transcribing.iter().position(|&t| t == (annotation, take)) {
+                    self.transcribing.remove(i);
+                    if let Some(a) = self.annotation(annotation) {
+                        a.said.push(Said { take, text });
+                    }
+                }
+            }
             Command::Finish => self.finish_now(false, false, cx),
+            Command::ToggleFreeze if self.live => self.freeze(None),
+            Command::ToggleFreeze => self.go_live(cx),
+            Command::Frozen { screens } => self.frozen(screens),
             Command::Close => self.cancel(cx),
             Command::Notice { text } => self.notice(text),
         }
@@ -755,9 +1194,17 @@ impl Overlay {
         self.dir.clone()
     }
 
-    /// Mark tool, cursor at rest: ask what's under it, to outline it before the click.
+    /// Development (replay): the open card's annotation.
+    pub fn card_key(&self) -> Option<u32> {
+        self.card.as_ref().map(|c| c.key)
+    }
+
+    /// Annotate, cursor at rest: ask what's under it, to outline it before the click.
     fn hover_lookup(&mut self) {
-        if !self.spec.identify || self.session.tool != Tool::Mark || self.session.drag.is_some() || self.card.is_some()
+        if !self.spec.identify
+            || self.session.tool != Tool::Annotate
+            || self.session.drag.is_some()
+            || self.card.is_some()
         {
             return;
         }
@@ -781,24 +1228,32 @@ impl Overlay {
         let Some(lookup) = self.pending.remove(&id) else { return };
         let Some(mut element) = element else { return };
         let screen = match lookup {
-            Lookup::Mark { screen, .. } | Lookup::Hover { screen } => screen,
+            Lookup::Annotation { screen, .. } | Lookup::Hover { screen } => screen,
         };
         let (ox, oy) = self.spec.screens[screen].origin;
         element.frame = element.frame.map(|f| PtRect::new(f.x - ox, f.y - oy, f.width, f.height));
         match lookup {
-            Lookup::Mark { screen, index, number, part } => {
+            Lookup::Annotation { screen, index, number, part } => {
                 let same = self.session.screens[screen].annotations.get(index).is_some_and(|a| a.number == number);
                 if same {
                     self.session.set_element(screen, index, part, element);
                 }
             }
             Lookup::Hover { screen } => {
-                self.hovered = match (element.frame, element.name) {
+                let hovered = match (element.frame, element.name) {
                     (Some(frame), Some(name)) => Some(Hovered { screen, frame, name }),
                     _ => None,
                 };
+                self.set_hovered(hovered);
             }
         }
+    }
+
+    /// The element outlined under the pointer; the session knows it too, so a click annotates it rather
+    /// than a larger section around it.
+    fn set_hovered(&mut self, hovered: Option<Hovered>) {
+        self.session.element = hovered.as_ref().map(|h| (h.screen, h.frame));
+        self.hovered = hovered;
     }
 
     fn recording_seconds(&self) -> Option<u32> {
@@ -1060,22 +1515,22 @@ impl Render for ScreenView {
                 }
             }
 
-            // Marks.
+            // Annotations.
             for a in &state.annotations {
-                let (r, g, b, alpha) = style::mark_color(a, accent);
-                let mark = Hsla::from(Rgba { r: r as f32, g: g as f32, b: b as f32, a: 1.0 });
+                let (r, g, b, alpha) = style::annotation_color(a, accent);
+                let ink = Hsla::from(Rgba { r: r as f32, g: g as f32, b: b as f32, a: 1.0 });
                 match (&a.shape, a.area) {
                     (Some(Shape::Sketch { points }), _) => {
-                        prims.push(Prim::Stroke(points.iter().map(|p| to(*p)).collect(), style::DRAW_WIDTH, mark));
+                        prims.push(Prim::Stroke(points.iter().map(|p| to(*p)).collect(), style::DRAW_WIDTH, ink));
                     }
-                    (Some(Shape::Arrow { from, to: end }), _) => arrow_prims(&mut prims, to(*from), to(*end), mark),
+                    (Some(Shape::Arrow { from, to: end }), _) => arrow_prims(&mut prims, to(*from), to(*end), ink),
                     (None, Some(area)) => {
-                        prims.push(Prim::Fill(rect(area), Hsla { a: alpha, ..mark }));
-                        prims.push(Prim::Border(rect(area), mark, 1.5, true));
+                        prims.push(Prim::Fill(rect(area), Hsla { a: alpha, ..ink }));
+                        prims.push(Prim::Border(rect(area), ink, 1.5, true));
                     }
                     (None, None) => {
                         if let Some(frame) = a.element.as_ref().and_then(|e| e.frame) {
-                            prims.push(Prim::Border(rect(frame), Hsla { a: 0.9, ..mark }, 1.5, false));
+                            prims.push(Prim::Border(rect(frame), Hsla { a: 0.9, ..ink }, 1.5, false));
                         }
                     }
                 }
@@ -1088,7 +1543,7 @@ impl Render for ScreenView {
                         .top(px((my - MARKER / 2.0) as f32))
                         .size(px(MARKER as f32))
                         .rounded_full()
-                        .bg(mark)
+                        .bg(ink)
                         .border_2()
                         .border_color(gpui::white())
                         .shadow_md()
@@ -1181,7 +1636,9 @@ impl Render for ScreenView {
                     tool => {
                         if let Some((_, r, snapped)) = session.drag_area() {
                             let (fill_c, line_c) = match tool {
-                                Tool::Mark => (color(style::MARK_GREEN, 0.1), color(style::MARK_GREEN, 1.0)),
+                                Tool::Annotate => {
+                                    (color(style::ANNOTATION_GREEN, 0.1), color(style::ANNOTATION_GREEN, 1.0))
+                                }
                                 Tool::Shot => (color(0xffffff, 0.12), color(0xffffff, 0.9)),
                                 _ => (color(accent, style::AREA_TINT), accent_c),
                             };
@@ -1202,11 +1659,19 @@ impl Render for ScreenView {
                     }
                 }
             }
-            if let Some(h) =
+            // Annotate: what a click annotates, a measured section or the element under the pointer.
+            let section = cursor
+                .filter(|_| session.tool == Tool::Annotate && session.drag.is_none() && o.card.is_none())
+                .filter(|&(x, y)| session.marker_at(screen, x, y).is_none())
+                .and_then(|(x, y)| session.section_at(screen, x, y));
+            if let Some(r) = section {
+                prims.push(Prim::Fill(rect(r), color(style::ANNOTATION_BLUE, 0.12)));
+                prims.push(Prim::Border(rect(r), color(style::ANNOTATION_BLUE, 1.0), 1.5, false));
+            } else if let Some(h) =
                 o.hovered.as_ref().filter(|h| h.screen == screen && session.drag.is_none() && o.card.is_none())
             {
-                prims.push(Prim::Fill(rect(h.frame), color(style::MARK_BLUE, 0.12)));
-                prims.push(Prim::Border(rect(h.frame), color(style::MARK_BLUE, 1.0), 1.5, false));
+                prims.push(Prim::Fill(rect(h.frame), color(style::ANNOTATION_BLUE, 0.12)));
+                prims.push(Prim::Border(rect(h.frame), color(style::ANNOTATION_BLUE, 1.0), 1.5, false));
                 let name: String = h.name.chars().take(60).collect();
                 let w = pill_width(&name);
                 let x = (h.frame.x + h.frame.width / 2.0).clamp(w / 2.0 + 4.0, sw - w / 2.0 - 4.0);
@@ -1216,14 +1681,14 @@ impl Render for ScreenView {
         }
 
         let cursor_style = match session.tool {
-            Tool::Mark => CursorStyle::Arrow,
+            Tool::Annotate => CursorStyle::Arrow,
             _ => CursorStyle::Crosshair,
         };
         let shows_toolbar = o.session.cursor.map_or(screen == 0, |c| c.0 == screen);
         let card = o.card.as_ref().filter(|c| c.screen == screen).map(|c| self.card(o, c, (ox, oy), (ww, wh)));
         let menu = o.menu.as_ref().filter(|m| m.screen == screen).map(|m| self.menu(m, (ox, oy), (ww, wh)));
         let shows_help = (o.help || o.help_hover) && shows_toolbar;
-        let bottom = (shows_toolbar && !session.hidden).then(|| self.bottom(o, shows_help));
+        let bottom = (shows_toolbar && !session.hidden).then(|| self.bottom(o, shows_help, (ox, oy), (ww, wh)));
         let hidden_hint = (session.hidden && shows_toolbar)
             .then(|| pill(format!("Hidden · {} shows everything again", o.keys.label(Cmd::Hide)), (ww / 2.0, 20.0)));
         // Nowhere to add the aside: said when it opens, not after the work's done.
@@ -1240,7 +1705,7 @@ impl Render for ScreenView {
                     .text_color(gpui::white())
                     .text_size(px(12.))
                     .child(div().size(px(7.)).rounded_full().bg(color(style::INTENT_CHANGE, 1.0)))
-                    .child("Not bound to a repo · run `asides` in your project to keep what you mark"),
+                    .child("Not bound to a repo · run `asides` in your project to keep what you annotate"),
             )
         });
         let image = o.images[screen].clone();
@@ -1309,6 +1774,13 @@ fn listen(
     hitbox: Hitbox,
 ) {
     let at = move |p: Point<Pixels>| (f64::from(p.x) + ox, f64::from(p.y) + oy);
+    // Another app took over meanwhile (one macOS doesn't hold back, like Notification Center): a
+    // press anywhere on the frozen screen takes the system back.
+    window.on_mouse_event(|_: &MouseDownEvent, phase, _, _| {
+        if phase == DispatchPhase::Capture && !crate::native::is_active() {
+            crate::native::activate();
+        }
+    });
     let (o, h, v) = (overlay.clone(), hitbox.clone(), view.clone());
     window.on_mouse_event(move |e: &MouseDownEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble || !h.is_hovered(window) {
@@ -1371,68 +1843,110 @@ fn icon(name: &str, ink: Hsla) -> impl IntoElement {
     svg().path(format!("icons/{name}.svg")).size(px(15.)).text_color(ink)
 }
 
-impl ScreenView {
-    /// The bottom of the screen: a toast, the name of the button under the pointer, the keys
-    /// (while on `?`), and the toolbar, or, hidden, just the recording's time.
-    fn bottom(&self, o: &Overlay, shows_help: bool) -> AnyElement {
-        let session = &o.session;
-        let recording = o.recording_seconds();
-        let overlay = self.overlay.clone();
-        // An icon (or short text) button; its name shows above the toolbar while the pointer is on it.
-        let button = move |id: &str, name: String, emphasis: Emphasis, content: AnyElement, on: Box<OnPress>| {
-            let (o1, o2) = (overlay.clone(), overlay.clone());
-            let name: SharedString = name.into();
-            div()
-                .id(SharedString::from(id.to_string()))
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(5.))
-                .h(px(28.))
-                .min_w(px(30.))
-                .px(px(7.))
-                .rounded(px(7.))
-                .text_size(px(12.))
-                .text_color(emphasis.ink())
-                .when(emphasis == Emphasis::On, |d| d.bg(color(style::UI, 1.0)))
-                .when(emphasis == Emphasis::Primary, |d| {
-                    d.bg(color(style::UI, 1.0)).hover(|s| s.bg(color(style::UI_LIGHT, 1.0)))
-                })
-                .when(emphasis == Emphasis::Plain, |d| d.hover(|s| s.bg(color(0xffffff, 0.12))))
-                .cursor_pointer()
-                .on_hover(move |hovered, _, cx| {
-                    let name = name.clone();
-                    o1.update(cx, |o, cx| {
-                        o.hint = hovered.then_some(name);
-                        cx.notify();
-                    });
-                })
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    cx.stop_propagation();
-                    o2.update(cx, |o, cx| {
-                        on(o, window, cx);
-                        cx.notify();
-                    });
-                })
-                .child(content)
-                .into_any_element()
-        };
-        let sep = || div().w(px(1.)).h(px(18.)).mx(px(3.)).bg(color(0xffffff, 0.15)).into_any_element();
-        let plain = Emphasis::Plain.ink();
-        let mut items: Vec<AnyElement> = Vec::new();
-        for (tool, name) in
-            [(Tool::Measure, "measure"), (Tool::Mark, "mark"), (Tool::Draw, "draw"), (Tool::Shot, "shot")]
-        {
-            let emphasis = if session.tool == tool { Emphasis::On } else { Emphasis::Plain };
-            items.push(button(
-                name,
-                tool.label().to_string(),
-                emphasis,
-                icon(name, emphasis.ink()).into_any_element(),
-                Box::new(move |o, _, _| o.session.set_tool(tool)),
-            ));
-        }
-        items.push(sep());
+/// The toolbar: a handle to move it, the tools, the microphone, Done and close, and fold. Frozen,
+/// also the tolerance, the units, undo, copy, the keys and Live; over the live screen (`live`), the
+/// tools freeze the screen. Folded: the handle, the microphone and unfold.
+pub fn toolbar(overlay: &Entity<Overlay>, o: &Overlay, live: bool) -> AnyElement {
+    let session = &o.session;
+    // An icon (or short text) button; its name shows above the toolbar while the pointer is on it.
+    let button = |id: &str, name: String, emphasis: Emphasis, content: AnyElement, on: Box<OnPress>| {
+        let (o1, o2) = (overlay.clone(), overlay.clone());
+        let name: SharedString = name.into();
+        div()
+            .id(SharedString::from(id.to_string()))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(5.))
+            .h(px(28.))
+            .min_w(px(30.))
+            .px(px(7.))
+            .rounded(px(7.))
+            .text_size(px(12.))
+            .text_color(emphasis.ink())
+            .when(emphasis == Emphasis::On, |d| d.bg(color(style::UI, 1.0)))
+            .when(emphasis == Emphasis::Primary, |d| {
+                d.bg(color(style::UI, 1.0)).hover(|s| s.bg(color(style::UI_LIGHT, 1.0)))
+            })
+            .when(emphasis == Emphasis::Plain, |d| d.hover(|s| s.bg(color(0xffffff, 0.12))))
+            .cursor_pointer()
+            .on_hover(move |hovered, _, cx| {
+                let name = name.clone();
+                o1.update(cx, |o, cx| {
+                    o.hint = hovered.then_some(name);
+                    cx.notify();
+                });
+            })
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                o2.update(cx, |o, cx| {
+                    on(o, window, cx);
+                    cx.notify();
+                });
+            })
+            .child(content)
+            .into_any_element()
+    };
+    let sep = || div().w(px(1.)).h(px(18.)).mx(px(3.)).bg(color(0xffffff, 0.15)).into_any_element();
+    let plain = Emphasis::Plain.ink();
+    let grab = overlay.clone();
+    let mut items: Vec<AnyElement> = vec![
+        div()
+            .id("handle")
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(28.))
+            .w(px(16.))
+            .cursor(CursorStyle::OpenHand)
+            .on_mouse_down(MouseButton::Left, move |e, _, cx| {
+                cx.stop_propagation();
+                grab.update(cx, |o, _| o.grab_toolbar(e.position, live));
+            })
+            .child(svg().path("icons/grip.svg").size(px(14.)).text_color(color(0xffffff, 0.45)))
+            .into_any_element(),
+    ];
+    let fold = |folded: bool| {
+        button(
+            "fold",
+            if folded { "Unfold the toolbar" } else { "Fold the toolbar" }.into(),
+            Emphasis::Plain,
+            icon(if folded { "unfold" } else { "fold" }, plain).into_any_element(),
+            Box::new(|o, _, _| {
+                o.collapsed = !o.collapsed;
+                o.placed_toolbar();
+            }),
+        )
+    };
+    if o.collapsed {
+        items.push(talk_button(overlay, o, "talk", true));
+        items.push(fold(true));
+        return toolbar_panel(overlay, items, live);
+    }
+    for (tool, name) in
+        [(Tool::Measure, "measure"), (Tool::Annotate, "annotate"), (Tool::Draw, "draw"), (Tool::Shot, "shot")]
+    {
+        let emphasis = if !live && session.tool == tool { Emphasis::On } else { Emphasis::Plain };
+        let label = if live { format!("{}: freezes the screen", tool.label()) } else { tool.label().to_string() };
+        items.push(button(
+            name,
+            label,
+            emphasis,
+            icon(name, emphasis.ink()).into_any_element(),
+            Box::new(move |o, _, _| o.freeze(Some(tool))),
+        ));
+    }
+    if live {
+        items.push(button(
+            "pause",
+            format!("Freeze the screen ({})", o.spec.freeze_shortcut),
+            Emphasis::Plain,
+            icon("pause", plain).into_any_element(),
+            Box::new(|o, _, _| o.freeze(None)),
+        ));
+    }
+    items.push(sep());
+    if !live {
         let level = match session.tolerance.level() {
             "Medium" => "Med",
             other => other,
@@ -1460,8 +1974,10 @@ impl ScreenView {
             Box::new(|o, _, _| o.session.toggle_units()),
         ));
         items.push(sep());
-        items.push(self.talk_button(o, "talk"));
-        items.push(sep());
+    }
+    items.push(talk_button(overlay, o, "talk", true));
+    items.push(sep());
+    if !live {
         items.push(button(
             "undo",
             "Undo".into(),
@@ -1477,7 +1993,7 @@ impl ScreenView {
             Box::new(|o, w, cx| o.command(Cmd::CopyMarkdown, w, cx)),
         ));
         // `?`: the keys while the pointer is on it; a click keeps them up.
-        let (h1, h2) = (self.overlay.clone(), self.overlay.clone());
+        let (h1, h2) = (overlay.clone(), overlay.clone());
         let help_on = o.help || o.help_hover;
         let ink = if help_on { Emphasis::On.ink() } else { plain };
         items.push(
@@ -1507,49 +2023,157 @@ impl ScreenView {
                 .child(icon("help", ink))
                 .into_any_element(),
         );
-        items.push(sep());
-        let done_name = if o.spec.bound.is_some() { "Add to the aside" } else { "Not bound to a repo" };
         items.push(button(
-            "done",
-            done_name.into(),
-            Emphasis::Primary,
-            icon("check", Emphasis::Primary.ink()).into_any_element(),
-            Box::new(|o, w, cx| o.command(Cmd::Done, w, cx)),
-        ));
-        if o.spec.batch {
-            items.push(button(
-                "send",
-                "Add and send to your agent".into(),
-                Emphasis::Plain,
-                icon("send", plain).into_any_element(),
-                Box::new(|o, w, cx| o.command(Cmd::Send, w, cx)),
-            ));
-        }
-        items.push(button(
-            "close",
-            "Close".into(),
+            "live",
+            format!("Back to the live screen ({})", o.spec.freeze_shortcut),
             Emphasis::Plain,
-            icon("close", plain).into_any_element(),
-            Box::new(|o, w, cx| o.command(Cmd::Close, w, cx)),
+            icon("live", plain).into_any_element(),
+            Box::new(|o, w, cx| o.command(Cmd::Live, w, cx)),
         ));
+        items.push(sep());
+    }
+    let done_name = if o.spec.bound.is_some() { "Add it all to the aside" } else { "Not bound to a repo" };
+    items.push(button(
+        "done",
+        done_name.into(),
+        Emphasis::Primary,
+        icon("check", Emphasis::Primary.ink()).into_any_element(),
+        Box::new(|o, w, cx| o.command(Cmd::Done, w, cx)),
+    ));
+    if o.spec.batch {
+        items.push(button(
+            "send",
+            "Add and send to your agent".into(),
+            Emphasis::Plain,
+            icon("send", plain).into_any_element(),
+            Box::new(|o, w, cx| o.command(Cmd::Send, w, cx)),
+        ));
+    }
+    items.push(button(
+        "close",
+        "Close without adding anything".into(),
+        Emphasis::Plain,
+        icon("close", plain).into_any_element(),
+        Box::new(|o, w, cx| o.command(Cmd::Close, w, cx)),
+    ));
+    items.push(fold(false));
+    toolbar_panel(overlay, items, live)
+}
 
+/// The toolbar's panel around its buttons; it notes where it's drawn, to be moved (and over the
+/// live screen, for its window to fit it).
+fn toolbar_panel(overlay: &Entity<Overlay>, items: Vec<AnyElement>, live: bool) -> AnyElement {
+    let measure = overlay.clone();
+    div()
+        .id("toolbar")
+        .occlude()
+        .relative()
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .p(px(5.))
+        .rounded(px(12.))
+        .bg(color(style::PANEL, style::PANEL_ALPHA))
+        .border_1()
+        .border_color(color(0xffffff, 0.12))
+        .shadow_lg()
+        .children(items)
+        .child(
+            canvas(
+                move |bounds, _, cx| {
+                    measure.update(cx, |o, _| match live {
+                        true => o.live_toolbar_bounds = Some(bounds),
+                        false => o.toolbar_bounds = Some(bounds),
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+        .into_any_element()
+}
+
+/// The microphone: tap to start or stop recording, hold to talk. Red while recording, with the
+/// time on the toolbar (`timer`); dimmed when there's no repo to record into.
+fn talk_button(overlay: &Entity<Overlay>, o: &Overlay, id: &str, timer: bool) -> AnyElement {
+    let recording = o.recording_seconds();
+    let bound = o.spec.bound.is_some();
+    let (t1, t2, t3) = (overlay.clone(), overlay.clone(), overlay.clone());
+    let name: SharedString =
+        if bound { "Talk: hold, or tap to start and stop".into() } else { "Not bound to a repo".into() };
+    div()
+        .id(SharedString::from(id.to_string()))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(5.))
+        .h(px(28.))
+        .min_w(px(30.))
+        .px(px(7.))
+        .rounded(px(7.))
+        .text_size(px(12.))
+        .text_color(gpui::white())
+        .cursor_pointer()
+        .when(recording.is_some(), |d| d.bg(color(style::RECORDING, 1.0)))
+        .when(recording.is_none(), |d| d.hover(|s| s.bg(color(0xffffff, 0.12))))
+        .when(!bound, |d| d.opacity(0.4))
+        .on_hover(move |hovered, _, cx| {
+            let name = name.clone();
+            t3.update(cx, |o, cx| {
+                o.hint = hovered.then_some(name);
+                cx.notify();
+            });
+        })
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            cx.stop_propagation();
+            t1.update(cx, |o, cx| {
+                o.talk_button(true);
+                cx.notify();
+            });
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+            t2.update(cx, |o, _| o.talk_button(false));
+        })
+        .child(icon("mic", gpui::white()))
+        .children(recording.filter(|_| timer).map(|s| format!("{}:{:02}", s / 60, s % 60)))
+        .into_any_element()
+}
+
+/// The toolbar's window over the live screen.
+pub struct ToolbarView {
+    overlay: Entity<Overlay>,
+}
+
+impl ToolbarView {
+    pub fn new(overlay: Entity<Overlay>, cx: &mut Context<Self>) -> ToolbarView {
+        cx.observe(&overlay, |_, _, cx| cx.notify()).detach();
+        ToolbarView { overlay }
+    }
+}
+
+/// Room around the live toolbar in its window, for its shadow.
+pub const TOOLBAR_MARGIN: f64 = 8.0;
+
+impl Render for ToolbarView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let o = self.overlay.read(cx);
+        // As big as the toolbar: its window fits it.
+        div().size_full().flex().items_start().p(px(TOOLBAR_MARGIN as f32)).child(toolbar(&self.overlay, o, true))
+    }
+}
+
+impl ScreenView {
+    /// What goes with the toolbar: a toast, the name of the button under the pointer, the keys
+    /// (while on `?`), and the toolbar, at the bottom or where the user put it; hidden, just the
+    /// recording's time.
+    fn bottom(&self, o: &Overlay, shows_help: bool, (ox, oy): (f64, f64), (ww, wh): (f64, f64)) -> AnyElement {
+        let recording = o.recording_seconds();
         let toast = o.toast.as_ref().map(|(t, _)| t.clone());
         let tip = (o.toolbar && !shows_help).then(|| o.hint.clone()).flatten();
-        let toolbar = o.toolbar.then(|| {
-            div()
-                .id("toolbar")
-                .occlude()
-                .flex()
-                .items_center()
-                .gap(px(2.))
-                .p(px(5.))
-                .rounded(px(12.))
-                .bg(color(style::PANEL, style::PANEL_ALPHA))
-                .border_1()
-                .border_color(color(0xffffff, 0.12))
-                .shadow_lg()
-                .children(items)
-        });
+        let bar = o.toolbar.then(|| toolbar(&self.overlay, o, false));
         // Hidden, the toolbar still says it's recording.
         let recording_only = (!o.toolbar).then_some(recording).flatten().map(|s| {
             div()
@@ -1575,76 +2199,123 @@ impl ScreenView {
                 .text_size(px(12.))
                 .child(text)
         };
-        div()
-            .absolute()
-            .bottom(px(18.))
-            .left_0()
-            .right_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(8.))
-            .children(shows_help.then(|| self.help(o)))
-            .children(toast.map(small))
-            .children(tip.map(small))
-            .children(toolbar)
-            .children(recording_only)
-            .into_any_element()
+        let notes = |d: Div| {
+            d.flex()
+                .flex_col()
+                .items_center()
+                .gap(px(8.))
+                .children(shows_help.then(|| self.help(o)))
+                .children(toast.clone().map(small))
+                .children(tip.clone().map(small))
+        };
+        let screen = &o.spec.screens[self.screen].screen;
+        match o.toolbar_at.filter(|_| o.toolbar) {
+            // Where the user put it, kept on the screen, with what goes with it above it.
+            Some((fx, fy)) => {
+                let (w, h) = o
+                    .toolbar_bounds
+                    .map_or((560.0, 40.0), |b| (f32::from(b.size.width) as f64, f32::from(b.size.height) as f64));
+                let x = (fx * screen.width - ox).clamp(8.0, (ww - w - 8.0).max(8.0));
+                let y = (fy * screen.height - oy).clamp(8.0, (wh - h - 8.0).max(8.0));
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .child(
+                        notes(div())
+                            .absolute()
+                            .left(px((x + w / 2.0 - 320.0) as f32))
+                            .w(px(640.))
+                            .bottom(px((wh - y + 8.0) as f32))
+                            .justify_end(),
+                    )
+                    .child(div().absolute().left(px(x as f32)).top(px(y as f32)).children(bar))
+                    .into_any_element()
+            }
+            None => notes(div())
+                .absolute()
+                .bottom(px((o.lift(self.screen) + TOOLBAR_LIFT) as f32))
+                .left_0()
+                .right_0()
+                .children(bar)
+                .children(recording_only)
+                .into_any_element(),
+        }
     }
 
-    /// The microphone: tap to start or stop recording, hold to talk. Red with the time while
-    /// recording; dimmed when there's no repo to record into.
-    fn talk_button(&self, o: &Overlay, id: &str) -> AnyElement {
-        let recording = o.recording_seconds();
-        let bound = o.spec.bound.is_some();
-        let (t1, t2, t3) = (self.overlay.clone(), self.overlay.clone(), self.overlay.clone());
-        let name: SharedString =
-            if bound { "Talk: hold, or tap to start and stop".into() } else { "Not bound to a repo".into() };
-        div()
-            .id(SharedString::from(id.to_string()))
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(px(5.))
-            .h(px(28.))
-            .min_w(px(30.))
-            .px(px(7.))
-            .rounded(px(7.))
-            .text_size(px(12.))
-            .text_color(gpui::white())
-            .cursor_pointer()
-            .when(recording.is_some(), |d| d.bg(color(style::RECORDING, 1.0)))
-            .when(recording.is_none(), |d| d.hover(|s| s.bg(color(0xffffff, 0.12))))
-            .when(!bound, |d| d.opacity(0.4))
-            .on_hover(move |hovered, _, cx| {
-                let name = name.clone();
-                t3.update(cx, |o, cx| {
-                    o.hint = hovered.then_some(name);
-                    cx.notify();
-                });
-            })
-            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                cx.stop_propagation();
-                t1.update(cx, |o, cx| {
-                    o.talk_button(true);
-                    cx.notify();
-                });
-            })
-            .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-                t2.update(cx, |o, _| o.talk_button(false));
-            })
-            .child(icon("mic", gpui::white()))
-            .children(recording.map(|s| format!("{}:{:02}", s / 60, s % 60)))
-            .into_any_element()
-    }
-
-    /// A mark's card, one row: what should change, what kind of request it is (the dots), and
-    /// the microphone.
+    /// An annotation's card: what should change (typed, wrapping as it grows), what kind of request
+    /// it is (the dots), the microphone, and, once something was said about it, what was said and a
+    /// trash button to say it again.
     fn card(&self, o: &Overlay, card: &Card, (ox, oy): (f64, f64), (ww, wh): (f64, f64)) -> AnyElement {
         let state = &o.session.screens[card.screen];
         let Some(a) = state.annotations.get(card.index) else { return div().into_any_element() };
-        let x = (a.at.0 - ox + MARKER / 2.0 + 6.0).clamp(8.0, (ww - CARD_WIDTH - 8.0).max(8.0));
-        let y = (a.at.1 - oy + MARKER / 2.0 + 6.0).clamp(8.0, (wh - CARD_HEIGHT - 90.0).max(8.0));
+        let recording_here = o.recording.is_some() && o.recording_for == Some(card.key);
+        let transcribing = o.transcribing.iter().any(|&(k, _)| k == card.key)
+            || o.awaiting.is_some_and(|(k, at)| k == card.key && at.elapsed() < AWAIT_TRANSCRIPT);
+        // Wider by its trash button from the moment something's said, until it's deleted: the text
+        // field keeps its width, so what's typed doesn't wrap again. Placed for the wider card, it
+        // doesn't move sideways when it widens.
+        let has_said = !a.said.is_empty() || transcribing || recording_here;
+        let width = CARD_WIDTH + if has_said { TRASH_WIDTH } else { 0.0 };
+        let x = (a.at.0 - ox + MARKER / 2.0 + 6.0).clamp(8.0, (ww - CARD_WIDTH - TRASH_WIDTH - 8.0).max(8.0));
+        let below = (a.at.1 - oy + MARKER / 2.0 + 6.0).max(8.0);
+        // Near the bottom, above the annotation, growing upward: what was said goes above the text
+        // field, so the field stays put.
+        let above = (wh - (a.at.1 - oy - MARKER / 2.0 - 6.0)).max(8.0);
+        let up = below + CARD_ROOM > wh;
+        let said = a.said.iter().map(|s| s.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
+        let status = match (recording_here, transcribing) {
+            (true, _) => {
+                let s = o.recording_seconds().unwrap_or_default();
+                Some(format!("Listening… {}:{:02}", s / 60, s % 60))
+            }
+            (false, true) => Some("Transcribing…".to_string()),
+            _ if a.said.iter().any(|s| s.text.trim().is_empty()) && said.is_empty() => Some("Nothing heard".into()),
+            _ => None,
+        };
+        let said_row = (!said.is_empty() || status.is_some()).then(|| {
+            let text = match (said.is_empty(), &status) {
+                (false, Some(status)) => format!("“{said}” · {status}"),
+                (false, None) => format!("“{said}”"),
+                (true, status) => status.clone().unwrap_or_default(),
+            };
+            div()
+                .px(px(8.))
+                .pb(px(2.))
+                .text_size(px(12.))
+                .line_height(px(17.))
+                .text_color(color(0xffffff, 0.72))
+                .child(text)
+        });
+        let (unsay, tip) = (self.overlay.clone(), self.overlay.clone());
+        let key = card.key;
+        let trash = has_said.then(|| {
+            div()
+                .id("card-unsay")
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(28.))
+                .rounded(px(7.))
+                .cursor_pointer()
+                .hover(|s| s.bg(color(0xffffff, 0.12)))
+                .on_hover(move |hovered, _, cx| {
+                    tip.update(cx, |o, cx| {
+                        o.card_tip = hovered.then_some("Delete what you said, to say it again".into());
+                        cx.notify();
+                    });
+                })
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    unsay.update(cx, |o, cx| {
+                        o.unsay(key);
+                        o.card_tip = None;
+                        cx.notify();
+                    });
+                })
+                .child(icon("trash", gpui::white()))
+        });
         let dots = Intent::ALL.into_iter().enumerate().map(|(i, intent)| {
             let (pick, tip) = (self.overlay.clone(), self.overlay.clone());
             let on = card.intent == Some(intent);
@@ -1684,12 +2355,14 @@ impl ScreenView {
             .occlude()
             .absolute()
             .left(px(x as f32))
-            .top(px(y as f32))
-            .w(px(CARD_WIDTH as f32))
+            .when(!up, |d| d.top(px(below as f32)))
+            .when(up, |d| d.bottom(px(above as f32)))
+            .w(px(width as f32))
             .p(px(6.))
             .flex()
-            .items_center()
-            .gap(px(6.))
+            .when(!up, |d| d.flex_col())
+            .when(up, |d| d.flex_col_reverse())
+            .gap(px(4.))
             .rounded(px(12.))
             .bg(color(style::PANEL, style::PANEL_ALPHA))
             .border_1()
@@ -1697,9 +2370,17 @@ impl ScreenView {
             .shadow_lg()
             .text_color(gpui::white())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(div().flex_1().child(card.input.clone()))
-            .child(div().flex().items_center().gap(px(1.)).children(dots))
-            .child(self.talk_button(o, "card-talk"))
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(6.))
+                    .child(div().flex_1().child(card.input.clone()))
+                    .child(div().flex().items_center().h(px(30.)).gap(px(1.)).children(dots))
+                    .child(talk_button(&self.overlay, o, "card-talk", false))
+                    .children(trash),
+            )
+            .children(said_row)
             .children(o.card_tip.clone().map(|tip| {
                 div()
                     .absolute()
@@ -1777,7 +2458,7 @@ impl ScreenView {
         let talk = keys::label(&o.keys.talk);
         let left: Vec<(&str, String)> = vec![
             ("Measure", k(Cmd::Tool(Tool::Measure))),
-            ("Mark", k(Cmd::Tool(Tool::Mark))),
+            ("Annotate", k(Cmd::Tool(Tool::Annotate))),
             ("Draw (⇧ arrow)", k(Cmd::Tool(Tool::Draw))),
             ("Screenshot", k(Cmd::Tool(Tool::Shot))),
             ("Hold distance", format!("{} {}", k(Cmd::HoldH), k(Cmd::HoldV))),
@@ -1789,14 +2470,15 @@ impl ScreenView {
             ("Talk (hold)", talk),
             ("Undo", k(Cmd::Undo)),
             ("Clear", k(Cmd::Clear)),
-            ("Hide marks", k(Cmd::Hide)),
+            ("Hide all", k(Cmd::Hide)),
             ("Toolbar", k(Cmd::Toolbar)),
             ("Copy Markdown", k(Cmd::CopyMarkdown)),
+            ("Live screen", o.spec.freeze_shortcut.clone()),
             ("Done", k(Cmd::Done)),
             ("Close", k(Cmd::Close)),
         ];
         if o.spec.batch {
-            right.insert(7, ("Done and send", k(Cmd::Send)));
+            right.insert(8, ("Done and send", k(Cmd::Send)));
         }
         let cap = |text: String| {
             div()
@@ -1868,16 +2550,46 @@ fn capitalized(s: &'static str) -> &'static str {
     }
 }
 
-/// The clock: every `TICK`, the app's commands and what changes with time.
+/// The clock: every `TICK`, the app's commands and what changes with time, then the windows.
 pub fn run_clock(overlay: &Entity<Overlay>, cx: &mut App) {
-    let weak = overlay.downgrade();
+    // It keeps the overlay as long as the app runs (its windows open from here).
+    let overlay = overlay.clone();
     cx.spawn(async move |cx| {
         loop {
-            cx.background_executor().timer(TICK).await;
-            if weak.update(cx, |o, cx| o.tick(cx)).is_err() {
+            if let Err(err) = crate::windows::sync(&overlay, cx) {
+                eprintln!("asides-overlay: {err:#}");
+                break;
+            }
+            // Handing the system back, the frozen screens give way as soon as it's back.
+            let handing = cx
+                .update(|cx| {
+                    let o = overlay.read(cx);
+                    o.handoff.is_some() || o.taking_over.is_some()
+                })
+                .unwrap_or_default();
+            cx.background_executor().timer(if handing { HANDOFF_TICK } else { TICK }).await;
+            if overlay.update(cx, |o, cx| o.tick(cx)).is_err() {
                 break;
             }
         }
     })
     .detach();
+}
+
+/// The pointer, as a session has it: the screen under it, and where on it (none in development
+/// windows, which show only part of the screen).
+fn pointer(spec: &Spec) -> Option<(usize, f64, f64)> {
+    if spec.windowed.is_some() {
+        return None;
+    }
+    let (mx, my) = crate::native::mouse();
+    crate::windows::pointer_screen(&spec.screens).map(|i| {
+        let f = spec.screens[i].frame;
+        (i, mx - f.x, f.y + f.height - my)
+    })
+}
+
+/// The part of each screen the Dock and the menu bar leave (see `Overlay::visible`).
+fn visible_frames(screens: &[SpecScreen]) -> Vec<PtRect> {
+    screens.iter().map(|s| crate::native::visible_frame(s.frame)).collect()
 }

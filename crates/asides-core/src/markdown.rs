@@ -46,7 +46,7 @@ pub fn compose_entry(
     if let Some(audio) = audio_rel_path {
         heading.push_str(&format!(" · [audio]({audio})"));
     }
-    let mut blocks = vec![heading];
+    let mut blocks = Blocks::new(heading);
     let mut attachments: Vec<&Attachment> = attachments.iter().collect();
     attachments.sort_by(|a, b| a.offset.total_cmp(&b.offset));
     let mut pending = attachments.into_iter().peekable();
@@ -59,11 +59,11 @@ pub fn compose_entry(
             continue;
         }
         while let Some(att) = pending.next_if(|a| a.offset <= segment.start) {
-            flush(&mut blocks, &mut paragraph);
-            blocks.push(att.markdown());
+            blocks.said(&mut paragraph);
+            blocks.attach(att.markdown());
         }
         if last_end.is_some_and(|end| segment.start - end > PARAGRAPH_GAP_SECS) {
-            flush(&mut blocks, &mut paragraph);
+            blocks.said(&mut paragraph);
         }
         if !paragraph.is_empty() {
             paragraph.push(' ');
@@ -71,17 +71,67 @@ pub fn compose_entry(
         paragraph.push_str(text);
         last_end = Some(segment.end);
     }
-    flush(&mut blocks, &mut paragraph);
-    blocks.extend(pending.map(Attachment::markdown));
-    blocks.join("\n\n")
+    blocks.said(&mut paragraph);
+    for att in pending {
+        blocks.attach(att.markdown());
+    }
+    blocks.list.join("\n\n")
 }
 
 /// `## 7 · 14:41 · Screen` followed by screenshots and text, in order: an entry made without
 /// speaking, such as a Measure & Annotate session outside a recording.
 pub fn compose_attachments_entry(number: u32, time_label: &str, source: &str, attachments: &[Attachment]) -> String {
-    let mut blocks = vec![format!("## {number} · {time_label} · {source}")];
-    blocks.extend(attachments.iter().map(Attachment::markdown).filter(|m| !m.is_empty()));
-    blocks.join("\n\n")
+    let mut blocks = Blocks::new(format!("## {number} · {time_label} · {source}"));
+    for att in attachments {
+        blocks.attach(att.markdown());
+    }
+    blocks.list.join("\n\n")
+}
+
+/// Measure & Annotate's blocks (and nothing said between them) as Markdown.
+pub fn join_blocks(texts: impl IntoIterator<Item = String>) -> String {
+    let mut blocks = Blocks { list: Vec::new(), attached: false };
+    for text in texts {
+        blocks.attach(text);
+    }
+    blocks.list.join("\n\n")
+}
+
+/// An entry's blocks, separated by blank lines. Measurements are list items: made one after
+/// another, with nothing said between them, they stay one list.
+struct Blocks {
+    list: Vec<String>,
+    /// The last block is an attachment, not what was said.
+    attached: bool,
+}
+
+impl Blocks {
+    fn new(heading: String) -> Blocks {
+        Blocks { list: vec![heading], attached: false }
+    }
+
+    /// Ends the paragraph being said.
+    fn said(&mut self, paragraph: &mut String) {
+        if !paragraph.is_empty() {
+            self.list.push(std::mem::take(paragraph));
+            self.attached = false;
+        }
+    }
+
+    fn attach(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        let item = |s: &str| s.starts_with("- ");
+        match self.list.last_mut() {
+            Some(last) if self.attached && item(&text) && last.lines().last().is_some_and(item) => {
+                last.push('\n');
+                last.push_str(&text);
+            }
+            _ => self.list.push(text),
+        }
+        self.attached = true;
+    }
 }
 
 /// `## 6 · 14:40 · Wispr Flow` followed by text another app transcribed, exactly as it came.
@@ -92,12 +142,6 @@ pub fn compose_dictation_entry(number: u32, time_label: &str, source: &str, text
 /// The plain transcript of a recording, used for titles and for "nothing heard" checks.
 pub fn plain_text(segments: &[Segment]) -> String {
     segments.iter().map(|s| s.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ")
-}
-
-fn flush(blocks: &mut Vec<String>, paragraph: &mut String) {
-    if !paragraph.is_empty() {
-        blocks.push(std::mem::take(paragraph));
-    }
 }
 
 #[cfg(test)]
@@ -125,6 +169,22 @@ mod tests {
         assert_eq!(
             compose_entry(5, "09:10", Some("audio/05.m4a"), &segments, &attachments),
             "## 5 · 09:10 · [audio](audio/05.m4a)\n\n![img1](images/01.png)\n\nHere.\n\n![img2](images/02.png)\n\nThe padding. And this.\n\n![img3](images/03.png)\n\n![img4](images/04.png)"
+        );
+    }
+
+    #[test]
+    fn measurements_in_a_row_are_one_list() {
+        let text = |offset: f32, t: &str| Attachment { offset, text: Some(t.into()), ..Attachment::default() };
+        let segments = [seg(0.0, 2.0, "- This one."), seg(5.0, 6.0, "And that.")];
+        let attachments =
+            [text(1.0, "- Area 1"), text(1.5, "- Area 2"), text(5.5, "- Area 3"), text(5.6, "### 1. row")];
+        assert_eq!(
+            compose_entry(1, "10:00", None, &segments, &attachments),
+            "## 1 · 10:00\n\n- This one.\n\n- Area 1\n- Area 2\n\nAnd that.\n\n- Area 3\n\n### 1. row"
+        );
+        assert_eq!(
+            join_blocks(["**Measured** in pt".into(), "- A".into(), "- B".into()]),
+            "**Measured** in pt\n\n- A\n- B"
         );
     }
 

@@ -12,7 +12,10 @@
 //! `shift`, `alt`, `cmd` and `right` modify mouse steps; `screen` picks the window. `answer`
 //! answers the overlay's pending lookups as the app would (frames in global points), `answers`
 //! answers them one each, oldest first (an arrow's two ends), and
-//! `{"recording": 14}` says a recording is 14 s in.
+//! `{"recording": 14}` says a recording is 14 s in (`"card": true`: for the open card's annotation),
+//! `{"transcribing": true}` that what was said about it is being transcribed, and `{"said": "…"}`
+//! that it was, as the app would. `"toolbar": true` sends a step to the live toolbar's window, and
+//! `{"frozen": true}` answers a freeze with the spec's screens, as the app would.
 
 use std::time::Duration;
 
@@ -46,8 +49,18 @@ struct Step {
     answer: Option<Element>,
     /// Answers the pending lookups one each, oldest first.
     answers: Option<Vec<Element>>,
-    /// The app says it's recording, this many seconds in.
+    /// The app says it's recording, this many seconds in...
     recording: Option<f32>,
+    /// ...for the open card's annotation.
+    card: bool,
+    /// What was said about the open card's annotation is being transcribed...
+    transcribing: bool,
+    /// ...and here it is.
+    said: Option<String>,
+    /// To the live toolbar's window.
+    toolbar: bool,
+    /// The app froze the screens (the spec's).
+    frozen: bool,
     capture: Option<String>,
 }
 
@@ -63,7 +76,10 @@ pub fn run(overlay: Entity<Overlay>, steps: serde_json::Value, cx: &mut App) {
             let wait = step.wait.unwrap_or(90);
             let Ok(Some((view, offset))) = cx.update(|cx| {
                 let o = overlay.read(cx);
-                o.windows.get(step.screen).map(|w| (w.view, w.offset))
+                match step.toolbar {
+                    true => o.toolbar_window.as_ref().map(|w| (w.view, (0.0, 0.0))),
+                    false => o.windows.get(step.screen).map(|w| (w.view, w.offset)).or(Some((0, (0.0, 0.0)))),
+                }
             }) else {
                 return;
             };
@@ -109,6 +125,10 @@ fn send(view: usize, offset: (f64, f64), step: &Step) {
 }
 
 fn after(overlay: &Entity<Overlay>, step: &Step, cx: &mut App) {
+    if step.frozen {
+        let screens = overlay.read(cx).spec().screens.clone();
+        overlay.update(cx, |o, cx| o.apply_command(Command::Frozen { screens }, cx));
+    }
     if let Some(element) = &step.answer {
         overlay.update(cx, |o, cx| o.answer_all(element.clone(), cx));
     }
@@ -116,10 +136,27 @@ fn after(overlay: &Entity<Overlay>, step: &Step, cx: &mut App) {
         overlay.update(cx, |o, cx| o.answer_each(elements.clone(), cx));
     }
     if let Some(seconds) = step.recording {
-        overlay.update(cx, |o, cx| o.apply_command(Command::Recording { seconds: Some(seconds) }, cx));
+        let annotation = step.card.then(|| overlay.read(cx).card_key()).flatten();
+        overlay.update(cx, |o, cx| o.apply_command(Command::Recording { seconds: Some(seconds), annotation }, cx));
+    }
+    if (step.transcribing || step.said.is_some())
+        && let Some(annotation) = overlay.read(cx).card_key()
+    {
+        overlay.update(cx, |o, cx| {
+            o.apply_command(Command::Recording { seconds: None, annotation: None }, cx);
+            if step.transcribing {
+                o.apply_command(Command::Transcribing { annotation, take: 1 }, cx);
+            }
+            if let Some(text) = step.said.clone() {
+                o.apply_command(Command::Transcribing { annotation, take: 2 }, cx);
+                o.apply_command(Command::Said { annotation, take: 2, text }, cx);
+            }
+        });
     }
     if let Some(path) = &step.capture {
-        let number = overlay.read(cx).windows.get(step.screen).map_or(0, |w| w.number);
+        let o = overlay.read(cx);
+        let window = if o.live { o.toolbar_window.as_ref() } else { o.windows.get(step.screen) };
+        let number = window.map_or(0, |w| w.number);
         let path = overlay.read(cx).dir().join(path);
         let status = std::process::Command::new("screencapture")
             .args(["-x", "-o", "-l", &number.to_string()])

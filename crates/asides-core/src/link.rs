@@ -32,6 +32,8 @@ pub enum Link {
         new_note: bool,
         image: Option<PathBuf>,
         image_at: f32,
+        /// Said about this annotation of the open Measure & Annotate session (its key).
+        annotation: Option<u32>,
         request: Option<String>,
     },
     /// Opens Measure & Annotate, as the shortcut does.
@@ -77,10 +79,13 @@ impl Link {
                         q.append_pair("req", request);
                     }
                 }
-                Link::Simulate { wav, new_note, image, image_at, request } => {
+                Link::Simulate { wav, new_note, image, image_at, annotation, request } => {
                     q.append_pair("wav", &wav.to_string_lossy());
                     if *new_note {
                         q.append_pair("new", "1");
+                    }
+                    if let Some(annotation) = annotation {
+                        q.append_pair("annotation", &annotation.to_string());
                     }
                     if let Some(image) = image {
                         q.append_pair("image", &image.to_string_lossy());
@@ -128,6 +133,7 @@ impl Link {
                 new_note: flag("new"),
                 image: get("image").map(PathBuf::from),
                 image_at: get("at").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                annotation: get("annotation").and_then(|v| v.parse().ok()),
                 request: get("req"),
             }),
             "measure" => Some(Link::Measure { request: get("req") }),
@@ -180,6 +186,7 @@ mod tests {
             new_note: false,
             image: Some("/tmp/i.png".into()),
             image_at: 2.5,
+            annotation: Some(3),
             request: None,
         });
         round_trip(Link::Measure { request: Some("r3".into()) });

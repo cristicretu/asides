@@ -7,22 +7,26 @@ before changing the app. [CONTRIBUTING.md](CONTRIBUTING.md) has the full human w
 
 asides is a macOS menu-bar app plus a CLI.
 - `asides` binds a repo.
-- A global shortcut records speech.
+- A global shortcut (`⌃⌥Space`) opens Asides: one mode, the screen frozen under a toolbar to
+  measure and annotate it while talking, or live (▶, `⌃⌥P`), the toolbar alone over it, to talk
+  while using the app.
 - whisper.cpp transcribes it locally, verbatim.
 - The transcript is appended to `<repo>/.asides/<YYYY-MM-DD-HHMM Title>/notes.md`.
 - Coding agents can listen through `asides mcp`, an MCP server in the CLI, and get each new
   entry (or a batch, on Send to Agent) as a prompt. They acknowledge, resolve, dismiss or reply to
-  asides and their marks (Agentation's feedback loop), appended to `threads.jsonl` beside the note.
+  asides and their annotations (Agentation's feedback loop), appended to `threads.jsonl` beside the note.
 - `asides claude` (or `codex`, `opencode`; New Agent Session in the menu runs it in a terminal)
   starts an agent already listening, with the MCP server on its command line. Codex sessions are
   threads in Codex's app-server daemon, and OpenCode sessions live in OpenCode's background service:
   asides pushes each aside into them. Every listening agent is a session; each aside goes to one, the target (`⌃⌥Tab` switches), recorded in `routes.jsonl`
   beside the note. A second session in a repo works in a git worktree.
-- Measure & Annotate (`⌃⌥M`) freezes every screen, in any app, under one toolbar: PixelSnap-style
-  measuring (distances, snapped areas, holds, guides), numbered marks on elements and areas,
-  drawings (arrows, circles), screenshots of parts, and talking (Space) while doing it. The
-  annotated screenshot and Markdown land in the aside, each mark where the user was speaking. Its
-  overlay is a separate GPUI process, `asides-overlay`. Web-only (Agentation's toolbar, React
+- Freezing (a tool or ⏸ on the toolbar, or `⌃⌥P`) freezes every screen, in any app, under the same
+  toolbar: PixelSnap-style measuring (distances, snapped areas, holds, guides), numbered
+  annotations on elements and areas, drawings (arrows, circles), screenshots of parts, and talking
+  (Space) while doing it; ▶ or `⌃⌥P` goes back to live, and a session can freeze many times. Done
+  adds it all as one aside: each freeze's screenshot, each measurement and annotation where the
+  user was speaking, and what's said from an annotation's card in that annotation. The toolbar
+  moves (its handle) and folds. Its overlay is a separate GPUI process, `asides-overlay`. Web-only (Agentation's toolbar, React
   names) and CleanShot-only (PixelSnap's hand-offs) features are out of scope: it works on
   anything on screen.
 - With the Wispr Flow integration on, Wispr Flow dictations become entries too.
@@ -31,7 +35,7 @@ It's a Rust workspace:
 - `crates/asides-core`: platform-independent logic.
 - `crates/asides-cli`: the `asides` binary.
 - `crates/asides-app`: the menu-bar app (binary `asides-app`, bundled as `Asides.app`).
-- `crates/asides-overlay`: the Measure & Annotate overlay (binary `asides-overlay`, GPUI), bundled
+- `crates/asides-overlay`: the overlay, toolbar and frozen screens (binary `asides-overlay`, GPUI), bundled
   beside the app's binary. Any new UI for it is GPUI.
 
 ## Commands
@@ -42,7 +46,7 @@ It's a Rust workspace:
 | Lint (must be clean) | `cargo clippy --workspace --all-targets --features asides-app/dev-hooks -- -D warnings` |
 | Unit tests | `make test` (= `cargo test --workspace`) |
 | End-to-end | `make e2e` (needs fixtures and the model; see below) |
-| Overlay image | `ASIDES_OVERLAY_DUMP=<dir> cargo test -p asides-overlay renders_marks` (writes `session.png`) |
+| Overlay image | `ASIDES_OVERLAY_DUMP=<dir> cargo test -p asides-overlay renders_annotations` (writes `session.png`) |
 | Overlay windows | `target/debug/asides-overlay <session dir>` with `windowed` and `replay` (see CONTRIBUTING.md) |
 | Speech tests | `make test-speech` (needs the model; also downloads 190 MB) |
 | Install | `make install` |
@@ -84,9 +88,9 @@ changes.
   It also rebinds the app to a temporary repo.
 - **Keep binary names unique ignoring case** (case-insensitive APFS). Don't name a binary
   `Asides`.
-- **Don't add permissions** without the maintainer's agreement. Measure & Annotate uses Screen
-  Recording (asked on first use) and Accessibility (only with `identify_elements`); recording
-  itself must keep working without either. New Agent Session uses Automation for Ghostty only (a
+- **Don't add permissions** without the maintainer's agreement. Freezing the screen uses Screen
+  Recording (asked on first use) and Accessibility (only with `identify_elements`); talking over
+  the live screen must keep working without either. New Agent Session uses Automation for Ghostty only (a
   tab per session; declined, a window of its own). Input Monitoring is not used.
 - **Keep the docs in sync.** Update the README (user-facing), ARCHITECTURE.md (structure,
   invariants) and CONTRIBUTING.md (workflow) when your change affects them. The website
@@ -97,7 +101,8 @@ changes.
 **You can:**
 - run all the automated tests
 - drive the installed app through the CLI with `asides simulate <wav> [--new] [--image FILE --at SECONDS]` (dev-hooks builds only; `make e2e` sets this up)
-- run Measure & Annotate sessions on an image with `asides simulate-measure <png> <script.json>`
+- run frozen sessions on an image with `asides simulate-measure <png> <script.json>` (`"live"` and
+  `"freeze"` steps for several freezes)
   (dev-hooks builds), and look at the image it adds with `ASIDES_OVERLAY_DUMP`
 - run the real overlay windows on a screenshot in a small window, play mouse and key steps in them
   (`replay`: AppKit events into GPUI's view), and capture them to PNGs to look at
@@ -117,6 +122,8 @@ changes.
 - press global shortcuts
 - click the status item or menus (New Agent Session, Asides Go To, Show)
 - use the overlay with a real mouse and keyboard, or check that it takes the keyboard without a click
+- check that the live toolbar leaves the keyboard and the clicks around it to the user's app, or
+  drag it (it follows the real mouse)
 - speak into the microphone
 - grant permissions (Microphone, Screen Recording, Accessibility)
 
@@ -148,8 +155,6 @@ The user may record a request and ask you to "implement the note". Find it with
 - tray-icon scales icons to at most 22 pt tall; `icons.rs` draws on a 22 pt canvas at 2×.
 - `if let` keeps its scrutinee's temporaries (including a `MutexGuard`) alive for the whole block,
   so locking the same mutex inside it deadlocks. Bind the value first.
-- An `Esc` key equivalent on a menu item would cancel the recording when Esc closes the menu, so
-  the shortcut is shown in the item's label instead.
 - `say -o x.aiff --data-format=LEI16@16000` fails; use `--file-format=WAVE`.
 - tao activates the app at launch unless `set_activate_ignoring_other_apps(false)`; a menu-bar app
   must not take focus.
@@ -185,8 +190,59 @@ The user may record a request and ask you to "implement the note". Find it with
   false` doesn't compile. Move the body into a plain function.
 - `CGBitmapContextCreate` isn't in objc2-core-graphics; read a `CGImage`'s pixels from its data
   provider (`capture::to_frame`, which handles every 8-bit byte order).
-- The global Esc (cancel recording) would steal Esc from the overlay: it's released while the
-  overlay is open and restored after.
+- There's no global Esc: over the live screen, Esc (and every key) belongs to the user's app; only
+  the global shortcuts reach Asides. It closes with its toolbar's × (or the menu), or Esc on a
+  frozen screen (twice when there's something to lose).
+- The live toolbar is its own GPUI pop-up window (a non-activating panel). `becomesKeyOnlyIfNeeded`
+  keeps clicks on it from taking the keyboard from the user's app, and `hidesOnDeactivate` must be
+  off: the overlay's app is never active over the live screen. Its window is sized to the toolbar,
+  so the toolbar must lay out at its own size (a flex parent): stretched to the window, the two
+  never shrink. GPUI doesn't implement `start_window_move` on macOS: the window follows the mouse
+  from the clock (`windows::follow_toolbar`, `NSEvent.pressedMouseButtons`), which replays can't
+  drive. A freeze's screenshots leave out the overlay's own windows (`capture::capture` `without`).
+- On a frozen screen the overlay sets every kiosk presentation option that holds the system back
+  (hide the Dock and the menu bar; no app switching, which also turns off Mission Control, App
+  Exposé, Show Desktop and switching spaces, with their gestures and hot corners; no hiding the
+  app; no Apple menu), but not Force Quit: a way out. An invalid combination throws (hiding the
+  menu bar needs the Dock hidden, and so does disabling switching). They apply only while its app is
+  active, so they're on while frozen and off live (`native::kiosk`, from `sync`). Notification
+  Center, Spotlight and the screenshot keys can't be held back.
+- macOS 26 takes the kiosk options from an accessory app (`currentSystemPresentationOptions` says
+  so) but still switches apps with ⌘Tab; for a regular one it doesn't (tested). The overlay is a
+  regular app while frozen (its Dock icon hidden with the Dock) and an accessory live. Asides'
+  global shortcuts still work under them.
+- `NSApp.activate()` (macOS 14's cooperative activation) was declined while the user's app was in
+  front: the overlay reported itself active, but the system's presentation options stayed off and
+  the frontmost app didn't change. `activateIgnoringOtherApps` (deprecated) activates it. The app
+  the overlay replaces gets the keyboard back from the overlay (active, it may hand it on:
+  `native::give_focus`), not from the menu-bar app, and only when the overlay has it: closing over
+  the live screen once sent the user back to the app they had left.
+- Handing the keyboard back is asynchronous: hidden at once, the frozen screens showed the user's
+  app drawn as one in the background (gray window buttons) for a frame. They stay up until it's in
+  front with the Dock and the menu bar back, and drew itself (`windows::handed_back`); closing frozen
+  waits the same way. Taking the system the moment they're ordered in, the menu bar hid a frame
+  before they covered it: the kiosk options wait until they're on screen (`windows::take_over`).
+  `screencapture -v` and per-frame diffs (ffmpeg, PIL) show such one-frame flashes.
+- GPUI's pop-ups fade in and out (`NSWindowAnimationBehaviorUtilityWindow`), showing what they
+  showed last while they fade: the overlay turns that off. A hidden GPUI window isn't drawn (its
+  display link stops), so it shows its last frame when it's shown again (the last freeze, the
+  pointer where it was): `native::draw_now` draws it first (`displayLayer:`, outside any update).
+- A GPUI window opened from `cx.open_window` with `show: true` shows before its first frame. The
+  overlay opens its windows hidden. With nothing else holding the overlay's entity (its windows'
+  views did, when they opened at launch), the clock holds it.
+- GPUI drops what AppKit tells it while it's updating (`try_borrow_mut` fails): a window resized,
+  shown or made key from inside `handle.update` never told GPUI its new size or key status. The
+  overlay changes its windows outside updates, by their views (`native::show`, `set_frame`).
+- A shortcut's ⌃⌥ also reached the frozen screen as Measure's ⌥: its lines changed while the
+  shortcut was held. With ⌃ down, Measure takes no modifiers.
+- GPUI keeps a `RenderImage` in its atlas until the window drops it (`Window::drop_image`): each
+  freeze's screenshots are dropped once the next are drawn.
+- Whisper writes in the language it detects: English said with an accent, in a short clip, came out
+  in Romanian. Unsure detections keep the last sure language (`stt::choose_language`).
+- GPUI can't show, hide or move a window from inside an event it's handling for that window: the
+  overlay changes its windows from the clock (`windows::sync`), after the event. The first time it
+  went live, opening the toolbar's window marked the toolbar shown, so the frozen screens never hid
+  (and covered it) until the next freeze: toggles seemed to do nothing.
 - The overlay's panels are non-activating, so the frontmost app keeps its look. Borderless panels
   need `canBecomeKeyWindow` to take the keyboard, and mouse moves come from an `ActiveAlways`
   tracking area.
@@ -194,7 +250,7 @@ The user may record a request and ask you to "implement the note". Find it with
   that owns the window under the point (from the window list taken before the overlay opened).
 - GPUI owns its `NSApplication` and event loop, like tao: the two can't share a process, hence
   `asides-overlay`. GPUI also makes its app a regular one (a Dock icon); `native::accessory` turns
-  that back right away.
+  that back right away (frozen, `native::kiosk` makes it regular again).
 - GPUI handles an input event by updating its window, so an event sent while that window is being
   updated (from inside `handle.update`, or a listener) is dropped with a logged error. The replay
   sends its AppKit events from its task, between updates. Likewise, focus the card's field with the
@@ -218,9 +274,10 @@ The user may record a request and ask you to "implement the note". Find it with
 - A light gray card on white (#F3F4F6) differs by 12 of 255: the default tolerance (2%) must stay
   below that.
 - A release in `/Applications/Asides.app` has the same bundle ID as the build `make install` puts in
-  `~/Applications`, and Launch Services may open it for the CLI's links instead (both may end up
-  running). Set `ASIDES_APP=~/Applications/Asides.app` to make the CLI send its links to that copy
-  (`open -a`); `make e2e` does.
+  `~/Applications`, and Launch Services, left to pick, opened the release for the CLI's links (both
+  ended up running, fighting over the shortcuts: the release's frozen-only overlay showed). The CLI
+  now sends its links to the app it ships in (`own_app`), or to `ASIDES_APP` (`open -a`; `make e2e`
+  sets it). Opened from Spotlight, either copy may still start: quit the one not under test.
 
 - `claude`'s `--mcp-config` and `--allowedTools` take every value after them, so the prompt goes
   first; after them it was read as a config file. A server given with `--mcp-config` replaces a

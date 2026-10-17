@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use asides_core::config::{AgentDelivery, Config, pretty_shortcut};
+use asides_core::config::{AgentDelivery, Config};
 use asides_core::inspect::{Detail, Units};
 use asides_core::launch::AgentKind;
 use asides_core::models::MODELS;
@@ -16,11 +16,14 @@ use crate::icons::StatusIcon;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuAction {
-    Record,
-    RecordNewNote,
+    /// Opens Asides, or, open, adds it all to the aside.
+    Open,
+    OpenInNewNote,
     AttachImage,
-    Measure,
-    Cancel,
+    /// Freezes the screen, or goes back to live.
+    Freeze,
+    /// Closes Asides without adding anything.
+    Discard,
     SendToAgent,
     /// An agent's reply in the Agent Replies menu: opens the note.
     OpenReplies,
@@ -137,7 +140,9 @@ pub struct View<'a> {
     pub icon: &'a StatusIcon,
     pub title: Option<String>,
     pub status: String,
-    pub recording: bool,
+    /// Asides is open, and its screen frozen.
+    pub open: bool,
+    pub frozen: bool,
     pub bound: Option<&'a Path>,
     pub note_info: String,
     pub has_note: bool,
@@ -151,13 +156,12 @@ pub struct View<'a> {
 impl Tray {
     pub fn new(config: &Config, devices: &[String], terminals: &[String], icon: &StatusIcon) -> anyhow::Result<Tray> {
         let status = MenuItem::new("", false, None);
-        let record = MenuItem::new("Start Recording", false, accelerator(&config.shortcuts.record));
-        let record_new = MenuItem::new("Start in New Note", false, accelerator(&config.shortcuts.record_new_note));
+        let record = MenuItem::new("Open Asides", false, accelerator(&config.shortcuts.asides));
+        let record_new = MenuItem::new("Open Asides in a New Note", false, accelerator(&config.shortcuts.new_note));
         let attach = MenuItem::new("Attach Clipboard Image", false, accelerator(&config.shortcuts.attach_image));
-        let measure =
-            MenuItem::new(menu_text("Measure & Annotate Screen"), true, accelerator(&config.shortcuts.measure));
+        let measure = MenuItem::new("Freeze the Screen", true, accelerator(&config.shortcuts.freeze));
         let replies_menu = Submenu::new("Agent Replies", false);
-        let cancel = MenuItem::new(cancel_label(config), false, None);
+        let cancel = MenuItem::new("Close Without Adding", false, None);
         let send = MenuItem::new("Send to Agent", false, accelerator(&config.shortcuts.send_to_agent));
         let new_session = Submenu::new("New Agent Session", true);
         let choose_directory = MenuItem::new("Choose Directory…", true, None);
@@ -181,7 +185,7 @@ impl Tray {
             None,
         );
         let pixels = CheckMenuItem::new("Measure in Pixels, Not Points", true, config.measure.units == Units::Px, None);
-        let measure_record = CheckMenuItem::new("Start Recording When It Opens", true, config.measure.record, None);
+        let measure_record = CheckMenuItem::new("Start Talking When Asides Opens", true, config.measure.record, None);
         let details: Vec<(Detail, CheckMenuItem)> = [
             (Detail::Compact, "Compact"),
             (Detail::Standard, "Standard"),
@@ -199,7 +203,6 @@ impl Tray {
         let accessibility = MenuItem::new("Accessibility Permission…", true, None);
         let measure_menu = Submenu::new(menu_text("Measure & Annotate"), true);
         measure_menu.append_items(&[
-            &measure_record,
             &identify,
             &pixels,
             &detail_menu,
@@ -257,6 +260,7 @@ impl Tray {
         let edit_settings = MenuItem::new(menu_text("Edit Shortcuts & Settings…"), true, None);
         let preferences = Submenu::new("Preferences", true);
         preferences.append_items(&[
+            &measure_record,
             &hold,
             &auto_attach,
             &sounds,
@@ -363,13 +367,13 @@ impl Tray {
 
     pub fn action(&self, id: &MenuId) -> Option<MenuAction> {
         let simple = [
-            (&self.record, MenuAction::Record),
-            (&self.record_new, MenuAction::RecordNewNote),
+            (&self.record, MenuAction::Open),
+            (&self.record_new, MenuAction::OpenInNewNote),
             (&self.attach, MenuAction::AttachImage),
-            (&self.measure, MenuAction::Measure),
+            (&self.measure, MenuAction::Freeze),
             (&self.screen_recording, MenuAction::ScreenRecordingSettings),
             (&self.accessibility, MenuAction::AccessibilitySettings),
-            (&self.cancel, MenuAction::Cancel),
+            (&self.cancel, MenuAction::Discard),
             (&self.send, MenuAction::SendToAgent),
             (&self.choose_directory, MenuAction::ChooseDirectory),
             (&self.open, MenuAction::OpenNote),
@@ -440,11 +444,12 @@ impl Tray {
         self.shown = Some(shown);
 
         self.status.set_text(menu_text(&view.status));
-        self.record.set_text(if view.recording { "Stop Recording" } else { "Start Recording" });
-        self.record.set_enabled(view.bound.is_some());
-        self.record_new.set_enabled(view.bound.is_some() && !view.recording);
+        self.record.set_text(if view.open { "Add It All to the Aside" } else { "Open Asides" });
+        self.record.set_enabled(view.bound.is_some() || view.open);
+        self.record_new.set_enabled(view.bound.is_some() && !view.open);
         self.attach.set_enabled(view.bound.is_some());
-        self.cancel.set_enabled(view.recording);
+        self.measure.set_text(if view.frozen { "Back to the Live Screen" } else { "Freeze the Screen" });
+        self.cancel.set_enabled(view.open);
         self.send.set_text(menu_text(&view.send_label));
         self.send.set_enabled(view.send_enabled);
         let directory = view.bound.and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
@@ -615,12 +620,11 @@ impl Tray {
         for (name, item) in &self.devices {
             item.set_checked(*name == config.input_device);
         }
-        let _ = self.record.set_accelerator(accelerator(&config.shortcuts.record));
-        let _ = self.record_new.set_accelerator(accelerator(&config.shortcuts.record_new_note));
+        let _ = self.record.set_accelerator(accelerator(&config.shortcuts.asides));
+        let _ = self.record_new.set_accelerator(accelerator(&config.shortcuts.new_note));
         let _ = self.attach.set_accelerator(accelerator(&config.shortcuts.attach_image));
         let _ = self.send.set_accelerator(accelerator(&config.shortcuts.send_to_agent));
-        let _ = self.measure.set_accelerator(accelerator(&config.shortcuts.measure));
-        self.cancel.set_text(cancel_label(config));
+        let _ = self.measure.set_accelerator(accelerator(&config.shortcuts.freeze));
     }
 
     /// Rebuilds the recent-directories part of the Directory submenu.
@@ -680,9 +684,4 @@ fn menu_text(text: &str) -> String {
 
 fn accelerator(shortcut: &str) -> Option<Accelerator> {
     Accelerator::from_str(shortcut).ok()
-}
-
-/// Esc is shown in the label rather than as a key equivalent, so Esc can still close the menu.
-fn cancel_label(config: &Config) -> String {
-    format!("Cancel Recording ({})", pretty_shortcut(&config.shortcuts.cancel))
 }

@@ -88,18 +88,39 @@ pub struct ScreenJob {
     pub route: Option<Route>,
 }
 
+/// What the user said about one annotation in Measure & Annotate (its card's microphone):
+/// transcribed straight away, for the overlay to show and the aside to have.
+pub struct TranscribeJob {
+    pub id: u64,
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+    pub model: String,
+    pub languages: Vec<String>,
+}
+
 pub enum Job {
     Recording(Box<RecordingJob>),
+    Transcribe(Box<TranscribeJob>),
     Image(Box<ImageJob>),
     Dictation(Box<DictationJob>),
     Screen(Box<ScreenJob>),
 }
 
 pub enum Outcome {
-    Appended { note: String, number: u32 },
-    ImageAdded { note: String },
+    Appended {
+        note: String,
+        number: u32,
+    },
+    ImageAdded {
+        note: String,
+    },
     NothingHeard,
     Failed(String),
+    /// A `TranscribeJob`'s transcript (empty when nothing was heard), or why there's none.
+    Transcribed {
+        id: u64,
+        text: Result<String, String>,
+    },
 }
 
 pub fn spawn(models: Arc<ModelManager>, done: impl Fn(Outcome) + Send + 'static) -> Sender<Job> {
@@ -119,6 +140,19 @@ pub fn spawn(models: Arc<ModelManager>, done: impl Fn(Outcome) + Send + 'static)
                 };
                 let outcome = match job {
                     Job::Recording(job) => process_recording(*job, &models, &mut transcriber),
+                    Job::Transcribe(job) => Ok(Outcome::Transcribed {
+                        id: job.id,
+                        text: transcribe(
+                            &job.samples,
+                            job.sample_rate,
+                            &job.model,
+                            &job.languages,
+                            &models,
+                            &mut transcriber,
+                        )
+                        .map(|segments| markdown::plain_text(&segments))
+                        .map_err(|err| format!("{err:#}")),
+                    }),
                     Job::Image(job) => process_image(*job),
                     Job::Dictation(job) => process_dictation(*job),
                     Job::Screen(job) => process_screen(*job),
@@ -136,22 +170,17 @@ fn process_recording(
     transcriber: &mut Option<Transcriber>,
 ) -> Result<Outcome> {
     let pcm = resample(&job.samples, job.sample_rate, WHISPER_RATE);
-    let segments = if stt::is_silent(&pcm) {
-        if job.images.is_empty() && job.texts.is_empty() && pcm.iter().all(|s| *s == 0.0) && !pcm.is_empty() {
-            return Ok(Outcome::Failed(
-                "The microphone delivered only silence. Check System Settings → Privacy & Security → Microphone."
-                    .into(),
-            ));
-        }
-        Vec::new()
-    } else {
-        if transcriber.as_ref().is_none_or(|t| t.model_id != job.model) {
-            *transcriber = None;
-            let path = models.wait_ready(&job.model)?;
-            *transcriber = Some(Transcriber::load(&job.model, &path)?);
-        }
-        transcriber.as_ref().unwrap().transcribe(&pcm, &job.languages)?
-    };
+    if stt::is_silent(&pcm)
+        && job.images.is_empty()
+        && job.texts.is_empty()
+        && pcm.iter().all(|s| *s == 0.0)
+        && !pcm.is_empty()
+    {
+        return Ok(Outcome::Failed(
+            "The microphone delivered only silence. Check System Settings → Privacy & Security → Microphone.".into(),
+        ));
+    }
+    let segments = transcribe_pcm(&pcm, &job.model, &job.languages, models, transcriber)?;
     let text = markdown::plain_text(&segments);
     if text.is_empty() && job.images.is_empty() && job.texts.is_empty() {
         return Ok(Outcome::NothingHeard);
@@ -180,6 +209,36 @@ fn process_recording(
     write_route(&note, number, &job.route);
     note.append(&entry).context("could not write the note")?;
     Ok(Outcome::Appended { note: note.title, number })
+}
+
+/// Whisper's segments for a recording (none when it's silent), loading the model if needed.
+fn transcribe(
+    samples: &[f32],
+    sample_rate: u32,
+    model: &str,
+    languages: &[String],
+    models: &Arc<ModelManager>,
+    transcriber: &mut Option<Transcriber>,
+) -> Result<Vec<markdown::Segment>> {
+    transcribe_pcm(&resample(samples, sample_rate, WHISPER_RATE), model, languages, models, transcriber)
+}
+
+fn transcribe_pcm(
+    pcm: &[f32],
+    model: &str,
+    languages: &[String],
+    models: &Arc<ModelManager>,
+    transcriber: &mut Option<Transcriber>,
+) -> Result<Vec<markdown::Segment>> {
+    if stt::is_silent(pcm) {
+        return Ok(Vec::new());
+    }
+    if transcriber.as_ref().is_none_or(|t| t.model_id != model) {
+        *transcriber = None;
+        let path = models.wait_ready(model)?;
+        *transcriber = Some(Transcriber::load(model, &path)?);
+    }
+    transcriber.as_mut().unwrap().transcribe(pcm, languages)
 }
 
 fn process_image(job: ImageJob) -> Result<Outcome> {

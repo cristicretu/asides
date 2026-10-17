@@ -1,4 +1,4 @@
-//! The images that leave the overlay: a frozen screen with what was measured, marked and drawn on
+//! The images that leave the overlay: a frozen screen with what was measured, annotated and drawn on
 //! it, cut to a part of it, as a PNG at the screen's resolution (for the aside, a screenshot, the
 //! clipboard). Drawn with AppKit into a bitmap, looking like the overlay. Main thread.
 
@@ -64,7 +64,7 @@ impl Exporter {
                 None,
             )
         };
-        Paint::new(self.accent).marks(session, screen);
+        Paint::new(self.accent).annotations(session, screen);
         flipped.flushGraphics();
         NSGraphicsContext::restoreGraphicsState_class();
         let png = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }?;
@@ -205,7 +205,7 @@ impl Paint {
         text_size(text, &self.font).width + 10.0
     }
 
-    fn marks(&self, session: &Session, screen: usize) {
+    fn annotations(&self, session: &Session, screen: usize) {
         let state = &session.screens[screen];
         let (width, height) = (state.screen.width, state.screen.height);
         let (scale, units) = (state.screen.scale, session.units);
@@ -291,8 +291,8 @@ impl Paint {
     }
 
     fn annotation(&self, a: &Annotation) {
-        let (r, g, b, alpha) = style::mark_color(a, self.accent_hex());
-        let mark = color((r, g, b), 1.0);
+        let (r, g, b, alpha) = style::annotation_color(a, self.accent_hex());
+        let ink = color((r, g, b), 1.0);
         match (&a.shape, a.area) {
             (Some(Shape::Sketch { points }), _) => {
                 let path = NSBezierPath::new();
@@ -303,7 +303,7 @@ impl Paint {
                 path.setLineWidth(style::DRAW_WIDTH as f64);
                 path.setLineCapStyle(NSLineCapStyle::Round);
                 path.setLineJoinStyle(NSLineJoinStyle::Round);
-                mark.setStroke();
+                ink.setStroke();
                 path.stroke();
             }
             (Some(Shape::Arrow { from, to }), _) => {
@@ -313,20 +313,20 @@ impl Paint {
                 shaft.lineToPoint(NSPoint::new((left.0 + right.0) / 2.0, (left.1 + right.1) / 2.0));
                 shaft.setLineWidth(style::DRAW_WIDTH as f64);
                 shaft.setLineCapStyle(NSLineCapStyle::Round);
-                mark.setStroke();
+                ink.setStroke();
                 shaft.stroke();
                 let head = NSBezierPath::new();
                 head.moveToPoint(NSPoint::new(tip.0, tip.1));
                 head.lineToPoint(NSPoint::new(left.0, left.1));
                 head.lineToPoint(NSPoint::new(right.0, right.1));
                 head.closePath();
-                mark.setFill();
+                ink.setFill();
                 head.fill();
             }
             (None, Some(area)) => {
                 color((r, g, b), alpha as f64).setFill();
                 NSBezierPath::fillRect(ns(area));
-                mark.setStroke();
+                ink.setStroke();
                 stroke_rect(area, 1.5, Some(&[6.0, 4.0]));
             }
             (None, None) => {
@@ -337,7 +337,7 @@ impl Paint {
             }
         }
         let rect = NSRect::new(NSPoint::new(a.at.0 - MARKER / 2.0, a.at.1 - MARKER / 2.0), NSSize::new(MARKER, MARKER));
-        mark.setFill();
+        ink.setFill();
         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
         NSColor::whiteColor().setStroke();
         let ring = NSBezierPath::bezierPathWithOvalInRect(rect);
@@ -371,7 +371,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renders_marks_onto_the_screen() {
+    fn renders_annotations_onto_the_screen() {
         // A 400 × 240 pt screen at 2×: a card with a title, a line of text and a blue button.
         let mut frame = Frame::filled(800, 480, 0xffffff);
         frame.fill(Rect::new(80, 60, 640, 380), 0xf3f4f6);

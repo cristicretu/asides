@@ -121,10 +121,15 @@ fn download(spec: &ModelSpec, path: &Path, progress: impl Fn(f32)) -> Result<()>
     Ok(())
 }
 
+/// Whisper's language detection, above this, is sure (and the language is remembered).
+const SURE: f32 = 0.8;
+
 pub struct Transcriber {
     pub model_id: String,
     context: WhisperContext,
     threads: i32,
+    /// The language of the last recording whose language Whisper was sure of.
+    recent: Option<String>,
 }
 
 impl Transcriber {
@@ -134,11 +139,11 @@ impl Transcriber {
         let context = WhisperContext::new_with_params(path, WhisperContextParameters::default())
             .context("could not load the speech model")?;
         let threads = std::thread::available_parallelism().map(|n| n.get().min(8)).unwrap_or(4) as i32;
-        Ok(Transcriber { model_id: model_id.to_string(), context, threads })
+        Ok(Transcriber { model_id: model_id.to_string(), context, threads, recent: None })
     }
 
     /// Verbatim transcription of 16 kHz mono audio, in the most likely of `languages` (empty: any).
-    pub fn transcribe(&self, pcm: &[f32], languages: &[String]) -> Result<Vec<Segment>> {
+    pub fn transcribe(&mut self, pcm: &[f32], languages: &[String]) -> Result<Vec<Segment>> {
         // Whisper needs at least a second of audio; pad short clips with silence.
         let mut padded;
         let pcm = if pcm.len() < 17_600 {
@@ -154,7 +159,11 @@ impl Transcriber {
             _ => {
                 state.pcm_to_mel(pcm, self.threads as usize)?;
                 let (_, probabilities) = state.lang_detect(0, self.threads as usize)?;
-                choose_language(&probabilities, languages)?
+                let (language, sure) = choose_language(&probabilities, languages, self.recent.as_deref())?;
+                if sure {
+                    self.recent = Some(language.clone());
+                }
+                language
             }
         };
         if whisper_rs::get_lang_id(&language).is_none() {
@@ -187,8 +196,11 @@ impl Transcriber {
     }
 }
 
-/// The most likely language among `allowed` (any language Whisper knows when empty).
-fn choose_language(probabilities: &[f32], allowed: &[String]) -> Result<String> {
+/// The most likely language among `allowed` (any language Whisper knows when empty), and whether
+/// Whisper is sure of it. Unsure (a short clip, an accent), the language it was last sure of wins
+/// when it's still a fair candidate: otherwise English said with an accent can come out written
+/// in another language, Whisper writing in the language it detects.
+fn choose_language(probabilities: &[f32], allowed: &[String], recent: Option<&str>) -> Result<(String, bool)> {
     let probability = |id: i32| probabilities.get(id as usize).copied().unwrap_or(0.0);
     let candidates: Vec<i32> = if allowed.is_empty() {
         (0..=whisper_rs::get_lang_max_id()).collect()
@@ -202,9 +214,19 @@ fn choose_language(probabilities: &[f32], allowed: &[String]) -> Result<String> 
             })
             .collect::<Result<_>>()?
     };
-    let best =
-        candidates.into_iter().max_by(|a, b| probability(*a).total_cmp(&probability(*b))).context("no languages")?;
-    Ok(whisper_rs::get_lang_str(best).context("unknown language id")?.to_string())
+    let total: f32 = candidates.iter().map(|&id| probability(id)).sum();
+    let best = candidates
+        .iter()
+        .copied()
+        .max_by(|a, b| probability(*a).total_cmp(&probability(*b)))
+        .context("no languages")?;
+    // Among the candidates: with `languages` set, how sure it is between those.
+    let sure = probability(best) >= SURE * total.max(f32::EPSILON);
+    let fallback = recent
+        .and_then(whisper_rs::get_lang_id)
+        .filter(|&id| !sure && candidates.contains(&id) && probability(id) >= 0.1 * total);
+    let chosen = fallback.unwrap_or(best);
+    Ok((whisper_rs::get_lang_str(chosen).context("unknown language id")?.to_string(), sure))
 }
 
 /// True for recordings with no audible sound (e.g. the microphone delivered silence).
@@ -235,9 +257,17 @@ mod tests {
         probabilities[id("ro")] = 0.3;
         probabilities[id("en")] = 0.1;
         let allowed = |codes: &[&str]| codes.iter().map(|c| c.to_string()).collect::<Vec<_>>();
-        assert_eq!(choose_language(&probabilities, &allowed(&["en", "ro"])).unwrap(), "ro");
-        assert_eq!(choose_language(&probabilities, &[]).unwrap(), "it");
-        assert!(choose_language(&probabilities, &allowed(&["en", "klingon"])).is_err());
+        let choose = |p: &[f32], allowed: &[String], recent| choose_language(p, allowed, recent).unwrap();
+        assert_eq!(choose(&probabilities, &allowed(&["en", "ro"]), None), ("ro".to_string(), false));
+        assert_eq!(choose(&probabilities, &[], None), ("it".to_string(), false));
+        assert!(choose_language(&probabilities, &allowed(&["en", "klingon"]), None).is_err());
+        // Unsure, the language it was last sure of, while it's a fair candidate.
+        assert_eq!(choose(&probabilities, &allowed(&["en", "ro"]), Some("en")), ("en".to_string(), false));
+        assert_eq!(choose(&probabilities, &[], Some("de")), ("it".to_string(), false));
+        probabilities[id("en")] = 0.95;
+        probabilities[id("it")] = 0.03;
+        probabilities[id("ro")] = 0.02;
+        assert_eq!(choose(&probabilities, &[], Some("ro")), ("en".to_string(), true));
     }
 
     #[test]
@@ -252,7 +282,7 @@ mod tests {
     #[ignore = "needs the large-v3-turbo model in ~/Library/Application Support/Asides/models"]
     fn transcribes_romanian_and_english_verbatim() {
         let spec = ModelSpec::find("large-v3-turbo");
-        let transcriber = Transcriber::load(spec.id, &spec.path()).unwrap();
+        let mut transcriber = Transcriber::load(spec.id, &spec.path()).unwrap();
 
         let started = Instant::now();
         let languages = ["ro".to_string(), "en".to_string()];

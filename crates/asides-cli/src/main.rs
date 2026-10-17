@@ -99,7 +99,7 @@ enum Command {
         #[arg(long, value_name = "PID", hide = true)]
         while_pid: Option<u32>,
     },
-    /// Freeze the screen to measure and annotate it (Measure & Annotate), as the shortcut does.
+    /// Open Asides with the screen frozen, as its shortcut does; while it's open, add it all to the aside.
     Annotate,
     /// Measure a screenshot (PNG): distances from a point to the nearest edges, or the bounds of the
     /// object inside an area, in the image's pixels.
@@ -124,6 +124,9 @@ enum Command {
         image: Option<PathBuf>,
         #[arg(long, default_value_t = 0.0)]
         at: f32,
+        /// Said about this annotation of the open Measure & Annotate session.
+        #[arg(long)]
+        annotation: Option<u32>,
     },
     /// Development: run a Measure & Annotate session on an image, driven by a JSON script.
     #[command(hide = true)]
@@ -230,11 +233,13 @@ fn run(cli: Cli) -> Result<()> {
             println!("queued");
             Ok(())
         }
-        Some(Command::Simulate { wav, new, image, at }) => {
+        Some(Command::Simulate { wav, new, image, at, annotation }) => {
             let request = request_id();
             let wav = wav.canonicalize().context("WAV file not found")?;
             let image = image.map(|i| i.canonicalize()).transpose().context("image not found")?;
-            send(&Link::Simulate { wav, new_note: new, image, image_at: at, request: Some(request.clone()) })?;
+            let link =
+                Link::Simulate { wav, new_note: new, image, image_at: at, annotation, request: Some(request.clone()) };
+            send(&link)?;
             wait_for_ack(&request)?;
             println!("queued");
             Ok(())
@@ -277,15 +282,15 @@ fn bind(dir: &Path, new_note: bool, title: Option<String>) -> Result<()> {
         None => println!("  → notes only: `asides claude` (or codex, opencode) starts an agent that gets each aside"),
     }
     println!(
-        "  {} record · {} record into a new note · {} attach clipboard image · {} cancel",
-        pretty_shortcut(&config.shortcuts.record),
-        pretty_shortcut(&config.shortcuts.record_new_note),
-        pretty_shortcut(&config.shortcuts.attach_image),
-        pretty_shortcut(&config.shortcuts.cancel),
+        "  {} open Asides (again: add it all to the aside; hold: talk) · {} into a new note",
+        pretty_shortcut(&config.shortcuts.asides),
+        pretty_shortcut(&config.shortcuts.new_note),
     );
-    if !config.shortcuts.measure.trim().is_empty() {
-        println!("  {} measure & annotate the screen", pretty_shortcut(&config.shortcuts.measure));
-    }
+    println!(
+        "  {} back to the live screen, or freeze it again · {} attach clipboard image",
+        pretty_shortcut(&config.shortcuts.freeze),
+        pretty_shortcut(&config.shortcuts.attach_image),
+    );
     if state.microphone == "denied" {
         println!("  ! Microphone access is denied: System Settings → Privacy & Security → Microphone → Asides.");
     }
@@ -388,13 +393,13 @@ pub(crate) fn is_running(pid: u32) -> bool {
     pid != 0 && Process::new("kill").args(["-0", &pid.to_string()]).output().is_ok_and(|o| o.status.success())
 }
 
-/// Hands the link to the app via Launch Services (launching it if needed, without stealing focus).
-/// `ASIDES_APP` names the copy to use, when several are installed: Launch Services picks one by
-/// bundle ID otherwise (the end-to-end test points it at the build under test).
+/// Hands the link to the app via Launch Services (launching it if needed, without stealing focus):
+/// the copy `ASIDES_APP` names, or the one this command ships in. Several copies share the bundle
+/// ID, and Launch Services, left to pick, may start another one beside the running one.
 pub(crate) fn send(link: &Link) -> Result<()> {
     let mut open = Process::new("open");
     open.arg("-g");
-    match std::env::var_os("ASIDES_APP") {
+    match std::env::var_os("ASIDES_APP").map(PathBuf::from).or_else(own_app) {
         Some(app) => open.arg("-a").arg(app),
         None => open.args(["-b", BUNDLE_ID]),
     };
@@ -406,6 +411,16 @@ pub(crate) fn send(link: &Link) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// The app this command ships in (`Asides.app/Contents/Helpers/asides`), when it runs from one.
+fn own_app() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let helpers = exe.parent()?;
+    let contents = helpers.parent()?;
+    let app = contents.parent()?;
+    (helpers.file_name()? == "Helpers" && contents.file_name()? == "Contents" && app.extension()? == "app")
+        .then(|| app.to_path_buf())
 }
 
 pub(crate) fn wait_for_ack(request: &str) -> Result<AppState> {

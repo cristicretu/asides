@@ -16,7 +16,7 @@ How asides fits together, for anyone about to change it. User-facing behavior is
       │                       └─────────────────────────────────────────────────────────────┘
       │ path / open / export                │ appends            ▲ JSON lines (stdin/stdout)
       ▼                                      ▼                    ▼
-                                                     asides-overlay (GPUI, while Measure & Annotate is open)
+                                                     asides-overlay (GPUI, while Asides is open)
             <repo>/.asides/<YYYY-MM-DD-HHMM Title>/notes.md, images/, audio/
       ▲
       │ reads entries; state.json (batch sends), config.toml (delivery mode)
@@ -47,12 +47,13 @@ How asides fits together, for anyone about to change it. User-facing behavior is
   entry's session in `routes.jsonl` before the entry, and each `asides mcp`/`asides listen` hands
   its agent only its own. `asides claude` (and the menu's New Agent Session, which runs it in a
   terminal) starts an agent already listening, with the MCP server on the agent's command line.
-- **Measure & Annotate is an overlay on frozen screens, in its own process.** The shortcut captures
-  every display (ScreenCaptureKit), and the app starts `asides-overlay`, which shows the screenshots
-  in borderless GPUI windows above everything. GPUI runs its own event loop, so it can't share the
+- **Asides is one mode, frozen or live, in its own process.** The shortcut captures every display
+  (ScreenCaptureKit) and starts `asides-overlay`, which shows the screenshots in borderless GPUI
+  windows above everything; going live leaves only its toolbar, over the live screen, until the
+  screen freezes again. GPUI runs its own event loop, so it can't share the
   app's (tao's) process. The session's logic (`asides-core/overlay.rs`, `measure.rs`,
   `inspect.rs`) is platform-independent; the overlay feeds it events and draws it. Permissions stay
-  in the app: it hands the overlay the pixels, and names what's under a mark when asked. The result
+  in the app: it hands the overlay the pixels, and names what's under an annotation when asked. The result
   reaches the worker like a screenshot does, inside the recording if one is under way.
 
 ## Code map
@@ -72,9 +73,11 @@ crates/
     launch.rs         starting an agent: Claude Code, Codex, OpenCode command lines with the MCP server; the listen prompt
     threads.rs        threads.jsonl: what agents (and the user) did with each aside; aside ids (3, 3.2)
     measure.rs        PixelSnap-style measuring on a frame: distances to edges, snapping areas and guides, objects, colors
-    inspect.rs        a Measure & Annotate result (measurements, guides, marks, drawings, elements) and its Markdown
-    overlay.rs        the Measure & Annotate session state machine (Measure, Mark, Draw, Shot; drags, holds,
-                      guides, markers, screenshots, restore), scripts
+    inspect.rs        a Measure & Annotate result (measurements, guides, annotations, drawings, elements, what was
+                      said about them) and its Markdown
+    overlay.rs        the Measure & Annotate session state machine (Measure, Annotate, Draw, Shot; drags, holds,
+                      guides, markers, annotated sections, screenshots, restore; when each was made), scripts
+    takes.rs          what's said during a Measure & Annotate session, joined into one recording; its moments on it
     helper.rs         the app ↔ overlay protocol: session.json (Spec), Events, Commands, result.json (Outcome)
     keys.rs           the overlay's key chords (`[measure.keys]`): parsing, matching, labels
     install.rs        where a hand-installed app links the `asides` command, and whether one is set up
@@ -97,14 +100,17 @@ crates/
     listen.rs         `asides listen`: deliveries on stdout, for agents watching it in the background
     measure.rs        `asides measure` and measure_image: PNG decoding and the measurement as text
   asides-overlay/  binary `asides-overlay`, shipped as Asides.app/Contents/MacOS/asides-overlay (GPUI)
-    main.rs           reads the session, opens a window per screen (or plays a script without windows)
-    ui.rs             Overlay (the session and around it) and ScreenView (drawing, mouse, keys): the toolbar,
-                      the mark card, the context menu, the keys sheet, toasts, talking, finishing
-    input.rs          the card's text field (GPUI's input example: IME, selection, clipboard)
+    main.rs           reads the session, opens the live toolbar or a window per screen (or plays a script)
+    ui.rs             Overlay (the session, live and frozen, and around it), ScreenView (drawing, mouse, keys)
+                      and ToolbarView: the toolbar, the annotation card, the context menu, the keys sheet,
+                      toasts, talking, finishing
+    windows.rs        the windows: opened, shown and hidden by mode, the live toolbar fitted and moved
+    input.rs          the card's text field (GPUI's input example: IME, selection, clipboard; wraps and grows)
     export.rs         the images that leave it (aside, Shot, clipboard), drawn with AppKit into a bitmap
-    finish.rs         result.json: the screen images, each mark's Markdown and the screenshots, by time
+    finish.rs         result.json: the screen images, each measurement's and annotation's Markdown, the screenshots, by time
     style.rs          colors and shapes shared by the windows and the exported images
-    native.rs         what GPUI's windows need to be an overlay (borderless, screen-saver level, all spaces)
+    native.rs         what GPUI's windows need to be an overlay (borderless, screen-saver level, all spaces),
+                      and the live toolbar's panel (never key)
     io.rs             Events on stdout, Commands from stdin
     replay.rs         development: plays mouse and key steps as AppKit events and captures the windows
     assets.rs         the toolbar's icons (SVG)
@@ -112,14 +118,15 @@ crates/
     main.rs           App: event loop, UserEvent dispatch, recording state machine, bind(), refresh(), publish()
     tray.rs           status item and menu (MenuAction, View, Directory submenu)
     icons.rs          SF Symbols rendered to RGBA for tray-icon
-    hotkeys.rs        global shortcuts (Carbon hot keys); Esc registered only while recording
+    hotkeys.rs        global shortcuts (Carbon hot keys): Asides, a new note, freeze, attach, send, switch
     audio.rs          cpal microphone capture → mono f32 at the device rate
-    worker.rs         Job queue: transcription, note creation, images, audio, Wispr Flow dictations, routes, append
+    worker.rs         Job queue: transcription, note creation, images, audio, Wispr Flow dictations, routes, append;
+                      transcribing what was said about an annotation, for its card
     watch.rs          polling threads: Wispr Flow's history, agent sessions and listeners, the latest note's threads
     terminal.rs       New Agent Session: a script for Terminal, Ghostty (a tab), iTerm or Diri; the login shell (PATH, agents)
     capture.rs        ScreenCaptureKit screenshots (sRGB) → frames; the Screen Recording permission; displays
     overlay.rs        starts asides-overlay with a session directory, relays its messages, reads its result
-    elements.rs       what's under a mark: the window list, and the accessibility tree (AXUIElement)
+    elements.rs       what's under an annotation: the window list, and the accessibility tree (AXUIElement)
     stt.rs            ModelManager (download, verify, wait), Transcriber (whisper-rs), language choice
     clipboard.rs      NSPasteboard: images (PNG, TIFF, file URLs), change counter, copy text
     environment.rs    macOS version, frontmost or last-active browser, display (note metadata)
@@ -177,16 +184,18 @@ Choosing a directory from the menu goes through `bind_from_menu`, which applies 
 
 ### A recording
 
-1. **Start** (`start_recording`, on a shortcut press or a menu click):
+1. **Start** (`start_recording`, while Asides is open: its talk key, a microphone, the Asides
+   shortcut held, or `measure.record`):
    - checks the binding and the microphone permission, and starts cpal
    - snapshots the environment (browser, display) and the clipboard's change count
    - consumes any pending "new note" request
-   - registers Esc and plays the start sound
+   - plays the start sound
 2. **While recording** (`tick`, every 250 ms): updates the timer in the menu bar. With
    auto-attach on, a changed clipboard holding an image becomes a `CapturedImage` with its offset
    from the start.
-3. **Stop** (`stop_recording`): stops cpal and unregisters Esc. Recordings under 0.3 s with no
-   images are dropped as accidental. Anything else becomes a `Job::Recording`.
+3. **Stop** (`stop_recording`): stops cpal. Recordings under 0.3 s with no images are dropped as
+   accidental. In Asides, the rest are takes (below); otherwise (`asides simulate`) a
+   `Job::Recording`.
 4. **Worker** (`process_recording`):
    - resamples to 16 kHz and checks for silence
    - waits for and loads the model (cached; unloaded after 15 idle minutes)
@@ -197,48 +206,89 @@ Choosing a directory from the menu goes through `bind_from_menu`, which applies 
    - saves images and optional audio, composes the entry and appends it
 5. **Outcome:** the main thread flashes `✓ #N`, re-reads the latest note and publishes the state.
 
-### Measure & Annotate
+### Asides: live and frozen
 
-1. **Open** (`App::measure`, on the shortcut, the menu or `asides annotate`): checks the Screen
-   Recording permission (asking for it the first time), lists the displays and snapshots the
-   window list (before the overlay covers it), then asks ScreenCaptureKit for one sRGB screenshot
-   per display.
-2. **Start the overlay** (`show_overlay`, on `UserEvent::Captured`): `overlay::start` writes each
-   display's pixels (raw RGBA) and `session.json` (`helper::Spec`: the screens, the settings and
-   keys, the last session's guides, whether a recording is under way) into a temporary session
-   directory, and starts `asides-overlay` with it. Esc (the global cancel shortcut) is released
-   while it's open, so it reaches the overlay. With `measure.record`, recording starts too.
-3. **The overlay** opens one borderless window per display (GPUI, made a non-activating panel at
-   screen-saver level on every space by `native.rs`) showing the screenshot, activates itself and
-   says `ready`. The view turns mouse and key events into `overlay::Session` calls (in the screen's
-   points) and redraws. A new mark (and, with the Mark tool, the element under a resting cursor)
-   is looked up with `identify`: the app answers from `elements::identify` (the app and window from
+1. **Open** (`App::open_asides`, on `⌃⌥Space`, `⌃⌥N`, `⌃⌥P`, the menu or `asides annotate`): Asides
+   opens frozen. `capture_screens` checks the Screen Recording permission (asking for it the first
+   time), lists the displays and snapshots the window list and the frontmost app, then asks
+   ScreenCaptureKit for one sRGB screenshot per display. On `UserEvent::Captured`, `show_overlay`:
+   `overlay::start` writes each display's pixels and `session.json` (`helper::Spec`: the screens, the
+   settings and keys, the last session's guides, the toolbar's place, whether a recording is under
+   way; `live` opens it over the live screen instead, for development) into a temporary session
+   directory, and starts `asides-overlay` with it. With `measure.record`, recording starts too.
+   While it's open, the Asides shortcut tapped adds it all (`finish`), and held, talks until it's
+   let go (`App::held`, from the clock), from the press that opened it too: that recording is the
+   session's (`started_recording`).
+2. **The live toolbar** (`windows::open_toolbar`, on ▶ or `⌃⌥P`): a small GPUI pop-up window (a
+   non-activating panel that never becomes key, `native::make_toolbar`) on the screen under the
+   pointer, where the user left it (`toolbar_at`, a fraction of the screen) or at the bottom,
+   sized to the toolbar (`follow_toolbar`). The user's apps keep the mouse and keyboard. Its tools,
+   ⏸, or the freeze shortcut (`toggle_freeze`), ask to freeze (`freeze`).
+3. **Freeze again** (`App::capture_screens`, as when it opens, leaving out the overlay's own
+   windows): the pixels go into the session directory and to the overlay (`frozen`), which starts
+   a new freeze of the session (`Session::refrozen`: numbering and clock go on).
+4. **The frozen screens** (`windows::open_screens`, the first time): one borderless window per
+   display (GPUI, made a non-activating panel at screen-saver level on every space by
+   `native.rs`) showing the screenshot, with Measure's lines where the pointer is; the overlay
+   activates itself, a regular app while frozen so the kiosk options hold (`native::kiosk`), and
+   says `ready`. ▶ or `⌃⌥P` goes back to live (`live`): the overlay gives the keyboard back to the
+   app that had it, and once that app is in front again (`windows::handed_back`), the screens hide
+   and the toolbar shows; what was done on the freeze is kept for the aside (`finish::items`, once
+   the live toolbar shows). Closing frozen gives it back too;
+   closing live leaves it with whatever app the user is in. The windows open hidden and change from
+   the clock (`windows::sync`), outside GPUI's updates and not from inside their events: each is
+   drawn before it shows (`native::draw_now`), so it never shows its last freeze, and the screens
+   and the toolbar take each other's place at once. The view turns mouse and key events into `overlay::Session` calls (in the screen's
+   points) and redraws, stamping what's added with the seconds into the session (`Session::clock`).
+   A new annotation (and, with Annotate, the element under a resting cursor, which the session also
+   gets, so a click annotates it rather than a larger measured section around it) is looked up with
+   `identify`: the app answers from `elements::identify` (the app and window from
    the window list, and with `identify_elements` and the Accessibility permission, the element from
    the app's accessibility tree, hit-testing that app so the overlay isn't hit). The talk key and the
-   microphone send `talk` down and up; the app treats them like the record shortcut and tells the
-   overlay when it records (`recording`), for its toolbar. Without a bound directory the spec says
-   so (`bound: None`): the overlay shows it from the start and won't record or finish. Errors the
-   app raises while the overlay covers the menu bar are also sent to it (`notice`).
-4. **Finish** (Return, the toolbar, or the shortcut again, which the app forwards as `finish`): for
-   each screen with something on it the overlay renders the screenshot cropped around what's there
-   (`export.rs`, sRGB, the screen's resolution) and `inspect` writes the measurements and marks as
-   Markdown. `result.json` lists them with the seconds into the session each was made, plus the
-   Shot tool's screenshots. On `finished`, `App::add_inspection` reads it: in a recording, the images
-   join its images and each mark becomes a text attachment at its moment
-   (`markdown::Attachment.text`), so it sits among what was said; otherwise a `Job::Screen` writes
-   `## N · HH:MM · Screen`, in the same order. A recording started in the overlay stops with it;
-   Send also sends to the agent. `cancelled` (Esc) adds nothing. Either way the app keeps the guides
+   microphones send `talk` down and up; the app treats them like the record shortcut and tells the
+   overlay when it records (`recording`), for its toolbar. A recording that stops while the overlay
+   is open isn't written: it's a take (`App::takes`), kept for the end of the session. One started
+   from an annotation's card (or while it's open) is about that annotation (`talk` names its key):
+   when it stops, the worker transcribes it straight away (`Job::Transcribe`), and the app sends the
+   transcript to the overlay (`transcribing`, then `said`), which shows it in the card and keeps it
+   in the annotation (`Annotation::said`). The card's trash sends `unsay`. Closing the card (it
+   stops a recording for it) doesn't wait for the transcript. Without a bound directory the spec
+   says so (`bound: None`): the overlay shows it from the start and won't record or finish. Errors the
+   app raises while the overlay covers the menu bar are also sent to it (`notice`). The toolbar
+   moves by its handle and folds; where, and whether, is remembered (`toolbar_placed`, `state.json`).
+5. **Finish** (Done, Return on a frozen screen, or the shortcut tapped, which the app forwards as
+   `finish`): for each freeze, and each screen with something on it, the overlay renders the
+   screenshot cropped around what's there
+   (`export.rs`, sRGB, the screen's resolution) and `inspect` writes the Markdown: what goes with the
+   screenshot (where, the screen and units, the guides), then each measurement (a list item) and
+   each annotation (with what was said about it, `**Said:**`). `result.json` lists them with the
+   seconds into the session each was made, the screenshot at the first of its screen's, plus the
+   Shot tool's screenshots; an annotation's item names its key and the recordings it already has.
+   On `finished`, the app first ends a recording about an annotation and waits for what was said
+   about the annotations to be transcribed (`App::finishing`, `try_finish`), adding what the overlay
+   didn't have yet to their blocks (`inspect::with_said`). Then, when something was said in the
+   session (takes, or a recording started in it, which stops with it), `App::add_session` joins the
+   takes into one recording (`takes::join`: in order, with a pause between them) and puts each item
+   at its moment on it (`Joined::offset`), as text attachments (`markdown::Attachment.text`), so they
+   sit among what was said: one `Job::Recording`, one entry. Measurements made one after another,
+   with nothing said between them, stay one list (`markdown::Blocks`). Otherwise `App::add_inspection` adds
+   them to the recording that was under way when the overlay opened (which goes on), or a
+   `Job::Screen` writes `## N · HH:MM · Screen`, in the same order. Send also sends to the agent.
+   `cancelled` (the toolbar's ×) adds nothing, the session's takes included; a recording that was under way when
+   it opened is kept. If the overlay dies, or Asides quits, the takes are kept as a recording
+   (`keep_takes`). Either way the app keeps the guides
    and held measurements for the next session's R, removes the session directory when the process
    exits, and gives the focus back to the app that had it.
-5. **Dev hooks:** `asides simulate-measure IMAGE SCRIPT` starts the overlay with an
-   `overlay::Script` in the spec: it plays it without windows and finishes. The end-to-end test uses
+6. **Dev hooks:** `asides simulate-measure IMAGE SCRIPT` starts the overlay frozen with an
+   `overlay::Script` in the spec: it plays it without windows (`live` and `freeze` steps freeze it
+   again) and finishes. The end-to-end test uses
    it. A `replay` in the spec plays mouse and key steps in real windows instead, as AppKit events,
    and captures them (`screencapture -l`), to check what the user sees.
 
 ### What happens to an aside (threads)
 
 `acknowledge_aside`, `resolve_aside`, `dismiss_aside` and `reply_to_aside` check that the aside exists
-in the note (`3`, or `3.2` for the mark `### 2.` of entry 3), then append one event to the note's
+in the note (`3`, or `3.2` for the annotation `### 2.` of entry 3), then append one event to the note's
 `threads.jsonl`: who (agent or human, and the agent's name), when, a status and/or a message. Each
 event is one `write` on a file opened for appending, so concurrent writers don't interleave.
 Readers fold the events into each aside's state (`threads::fold`). An annotation without events of
@@ -403,8 +453,10 @@ Break these only on purpose, and update this document when you do.
 
 ## Design decisions
 
-- **Measure & Annotate on a frozen screenshot.** PixelSnap 2 measures what's on screen when it's
-  invoked. Measuring a still frame keeps the overlay simple: the frame is what's measured, drawn
+- **Live, then frozen on demand.** The user keeps using their app while talking (the toolbar is a
+  panel that never takes the keyboard), and freezes the screen to measure and annotate it, as
+  often as they like, all in one aside. PixelSnap 2 measures what's on screen when it's invoked.
+  Measuring a still frame keeps the overlay simple: the frame is what's measured, drawn
   and exported. The annotated screenshot in the note matches exactly what the numbers describe,
   and nothing moves while you measure. The cost is the Screen Recording permission.
 - **ScreenCaptureKit, in sRGB.** `CGDisplayCreateImage` and `CGWindowListCreateImage` are
@@ -419,9 +471,11 @@ Break these only on purpose, and update this document when you do.
   bundle, started per session and talking JSON lines. The screenshot is taken before it starts, so
   the app being tested keeps its active look in it; when the overlay exits, that app gets the focus
   back.
-- **Talking is the main input.** Marks made while recording don't open a card, and each mark,
-  measurement and screenshot carries the seconds into the session it was made, so it lands in the
-  transcript where the user was speaking about it. Typing stays available for when talking isn't.
+- **Talking is the main input, in the order it happened.** Annotations made while recording don't
+  open a card, and each annotation, measurement and screenshot carries the seconds into the session
+  it was made, so it lands in the transcript where the user was speaking about it, never gathered
+  at the start or the end. What's said from an annotation's card is about it and goes in it. Typing
+  stays available for when talking isn't.
 - **Elements from the accessibility tree, opt-in.** Agentation reads the DOM from inside the page.
   A menu-bar app can't, but browsers expose the DOM's ids and classes (`AXDOMIdentifier`,
   `AXDOMClassList`) and the page's URL through accessibility, which also covers native apps. It
@@ -429,7 +483,7 @@ Break these only on purpose, and update this document when you do.
   name the app and window from the window list.
 - **For anything on screen, not just the web.** Agentation lives in the page (a React toolbar, the
   DOM, component names) and PixelSnap hands off to CleanShot and design apps. Asides keeps what
-  works on any app: measuring pixels, marking elements found through accessibility, drawing,
+  works on any app: measuring pixels, annotating elements found through accessibility, drawing,
   screenshots, and the agent's feedback loop through MCP.
 - **Sessions and one target.** The user talks to one agent at a time, so each aside goes to one
   session, picked in the menu or with `⌃⌥Tab`, and a new session (just started, or just asked to

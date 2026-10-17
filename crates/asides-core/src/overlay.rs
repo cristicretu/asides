@@ -7,12 +7,14 @@
 //!   inside (right-drag or ⌘ doesn't snap; ⌥-drag holds each object inside). Guides (⇧H, ⇧V) go
 //!   through the cursor, snapped to held objects and to the nearest edge; distances stop at guides
 //!   and at held objects.
-//! - **Mark**: a click puts a numbered marker on the element under it, a drag marks an area.
+//! - **Annotate**: a click puts a numbered marker on the element under it, or annotates the held
+//!   area (a measured section) it's in; a drag annotates an area.
 //! - **Draw**: a drag sketches (circle or underline something), a ⇧-drag draws an arrow, numbered
 //!   like markers.
 //! - **Shot**: a drag takes a screenshot of that part of the screen, then the tool goes back.
 //!
-//! Marks carry when they were made, so they can sit among what the user said.
+//! Annotations and measurements carry when they were made, so they can sit among what the user
+//! said.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,19 +40,18 @@ pub const MARKER: f64 = 22.0;
 pub enum Tool {
     #[default]
     Measure,
-    #[serde(alias = "annotate")]
-    Mark,
+    Annotate,
     Draw,
     Shot,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 4] = [Tool::Measure, Tool::Mark, Tool::Draw, Tool::Shot];
+    pub const ALL: [Tool; 4] = [Tool::Measure, Tool::Annotate, Tool::Draw, Tool::Shot];
 
     pub fn label(self) -> &'static str {
         match self {
             Tool::Measure => "Measure",
-            Tool::Mark => "Mark",
+            Tool::Annotate => "Annotate",
             Tool::Draw => "Draw",
             Tool::Shot => "Shot",
         }
@@ -64,6 +65,8 @@ pub struct ScreenState {
     pub frame: Frame,
     pub guides: Vec<Guide>,
     pub held: Vec<Measurement>,
+    /// When each held measurement was made, in seconds into the session.
+    pub held_times: Vec<f32>,
     pub annotations: Vec<Annotation>,
 }
 
@@ -106,7 +109,7 @@ pub enum Placed {
     Measurement {
         screen: usize,
     },
-    /// A new mark: identify what's under it and (unless the user is talking) ask for feedback.
+    /// A new annotation: identify what's under it and (unless the user is talking) ask for feedback.
     Annotation {
         screen: usize,
         index: usize,
@@ -123,7 +126,7 @@ pub enum Placed {
     },
 }
 
-/// Which part of a mark an identified element describes.
+/// Which part of an annotation an identified element describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Part {
@@ -133,7 +136,7 @@ pub enum Part {
     Target,
 }
 
-/// Where to look up the element for a new mark: `(part, x, y)`, in the screen's points.
+/// Where to look up the element for a new annotation: `(part, x, y)`, in the screen's points.
 pub fn lookups(annotation: &Annotation) -> Vec<(Part, f64, f64)> {
     match (&annotation.shape, annotation.area) {
         (Some(Shape::Arrow { from, to }), _) => vec![(Part::Element, from.0, from.1), (Part::Target, to.0, to.1)],
@@ -191,9 +194,16 @@ pub struct Session {
     pub moving: bool,
     /// Tab: everything hidden, to see the frozen screen as it was.
     pub hidden: bool,
+    /// Annotate: the element found under the pointer (Identify UI Elements), in its screen's
+    /// points, so a click annotates it rather than a larger section around it.
+    pub element: Option<(usize, PtRect)>,
     pub shots: Vec<Shot>,
+    /// Seconds into the session as of what the user last did: what's added is stamped with it.
+    pub clock: f32,
     added: Vec<(usize, Added)>,
     next_number: u32,
+    /// Annotations' keys: unlike their numbers, never reused.
+    next_key: u32,
 }
 
 impl Session {
@@ -212,14 +222,40 @@ impl Session {
             drag: None,
             moving: false,
             hidden: false,
+            element: None,
             shots: Vec::new(),
+            clock: 0.0,
             added: Vec::new(),
             next_number: 1,
+            next_key: 1,
+        }
+    }
+
+    /// The next freeze of the same session: the screens as they are now, nothing on them yet;
+    /// the tool, the settings, the clock and the numbering go on.
+    pub fn refrozen(&self, screens: Vec<ScreenState>) -> Session {
+        Session {
+            tool: if self.tool == Tool::Shot { self.previous_tool } else { self.tool },
+            previous_tool: self.previous_tool,
+            tolerance: self.tolerance,
+            normal_tolerance: self.normal_tolerance,
+            units: self.units,
+            clock: self.clock,
+            next_number: self.next_number,
+            next_key: self.next_key,
+            ..Session::new(screens, self.tolerance, self.units)
         }
     }
 
     pub fn screen(screen: Screen, frame: Frame) -> ScreenState {
-        ScreenState { screen, frame, guides: Vec::new(), held: Vec::new(), annotations: Vec::new() }
+        ScreenState {
+            screen,
+            frame,
+            guides: Vec::new(),
+            held: Vec::new(),
+            held_times: Vec::new(),
+            annotations: Vec::new(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -336,7 +372,7 @@ impl Session {
             drag.start = (drag.start.0 + dx, drag.start.1 + dy);
         }
         self.cursor = Some((screen, x, y));
-        let square = self.crosshair && !self.moving && matches!(self.tool, Tool::Measure | Tool::Mark | Tool::Shot);
+        let square = self.crosshair && !self.moving && matches!(self.tool, Tool::Measure | Tool::Annotate | Tool::Shot);
         if let Some(drag) = &mut self.drag
             && drag.screen == screen
         {
@@ -361,8 +397,9 @@ impl Session {
         self.drag = Some(Drag { screen, start: (x, y), current: (x, y), snap: !right, points: vec![(x, y)] });
     }
 
-    /// Ends a click or drag, adding what it measured, marked, drew or shot.
+    /// Ends a click or drag, adding what it measured, annotated, drew or shot.
     pub fn mouse_up(&mut self, screen: usize, x: f64, y: f64, time: f32) -> Placed {
+        self.clock = time;
         self.move_to(screen, x, y);
         let area = self.drag_area();
         let objects = self.drag_objects();
@@ -397,12 +434,12 @@ impl Session {
                 }
                 _ => Placed::Nothing,
             },
-            Tool::Mark | Tool::Draw if click => match self.marker_at(screen, drag.start.0, drag.start.1) {
+            Tool::Annotate | Tool::Draw if click => match self.marker_at(screen, drag.start.0, drag.start.1) {
                 Some(index) => Placed::Edit { screen, index },
-                None if self.tool == Tool::Mark => self.annotate(screen, drag.start, None, None, time),
+                None if self.tool == Tool::Annotate => self.annotate_at(screen, drag.start.0, drag.start.1, time),
                 None => Placed::Nothing,
             },
-            Tool::Mark => self.annotate(screen, drag.start, Some(drag.rect()), None, time),
+            Tool::Annotate => self.annotate(screen, drag.start, Some(drag.rect()), None, time),
             Tool::Draw => {
                 let shape = if self.crosshair {
                     Shape::Arrow { from: drag.start, to: drag.current }
@@ -425,9 +462,10 @@ impl Session {
     }
 
     fn hold(&mut self, screen: usize, m: Measurement) -> Placed {
-        let held = &mut self.screens[screen].held;
-        held.push(m);
-        self.added.push((screen, Added::Held(held.len() - 1)));
+        let state = &mut self.screens[screen];
+        state.held.push(m);
+        state.held_times.push(self.clock);
+        self.added.push((screen, Added::Held(state.held.len() - 1)));
         Placed::Measurement { screen }
     }
 
@@ -470,6 +508,55 @@ impl Session {
         self.shot(screen, PtRect::new(r.x - pad, r.y - pad, r.width + 2.0 * pad, r.height + 2.0 * pad), time)
     }
 
+    /// Annotates what's at `(x, y)`: the section there (see `section_at`), or else the element
+    /// under it. A click with Annotate, or the context menu's Annotate Here.
+    pub fn annotate_at(&mut self, screen: usize, x: f64, y: f64, time: f32) -> Placed {
+        match self.section_at(screen, x, y) {
+            Some(rect) => self.annotate_section(screen, rect, time),
+            None => self.annotate(screen, (x, y), None, None, time),
+        }
+    }
+
+    /// Annotates a held area (the context menu's Annotate This on a measured section).
+    pub fn annotate_held(&mut self, screen: usize, index: usize, time: f32) -> Placed {
+        match self.screens.get(screen).and_then(|s| s.held.get(index)) {
+            Some(&Measurement::Area { rect, .. }) => self.annotate_section(screen, rect, time),
+            _ => Placed::Nothing,
+        }
+    }
+
+    /// An annotation on the area of a section, or, when it has one already, that one to edit.
+    fn annotate_section(&mut self, screen: usize, rect: PtRect, time: f32) -> Placed {
+        let list = &self.screens[screen].annotations;
+        match list.iter().position(|a| a.shape.is_none() && a.area == Some(rect)) {
+            Some(index) => Placed::Edit { screen, index },
+            None => self.annotate(screen, (rect.x, rect.y), Some(rect), None, time),
+        }
+    }
+
+    /// The measured section (a held area, snapped to an object or drawn) that Annotate annotates at
+    /// `(x, y)`: the smallest one there, unless the element under the pointer (`element`) is
+    /// clearly smaller. What's outlined under the pointer, and annotated, is the most specific.
+    pub fn section_at(&self, screen: usize, x: f64, y: f64) -> Option<PtRect> {
+        let size = |r: &PtRect| r.width * r.height;
+        let section = self
+            .screens
+            .get(screen)?
+            .held
+            .iter()
+            .filter_map(|m| match m {
+                Measurement::Area { rect, .. } if rect.contains(x, y) => Some(*rect),
+                _ => None,
+            })
+            .min_by(|a, b| size(a).total_cmp(&size(b)))?;
+        match self.element {
+            Some((s, frame)) if s == screen && frame.contains(x, y) && size(&frame) < size(&section) => {
+                fits(frame, section).then_some(section)
+            }
+            _ => Some(section),
+        }
+    }
+
     fn annotate(
         &mut self,
         screen: usize,
@@ -482,8 +569,10 @@ impl Session {
             Some(r) => (r.x, r.y),
             None => at,
         };
-        let annotation = Annotation { number: self.next_number, at, area, shape, time, ..Annotation::default() };
+        let key = self.next_key;
+        let annotation = Annotation { number: self.next_number, key, at, area, shape, time, ..Annotation::default() };
         self.next_number += 1;
+        self.next_key += 1;
         let list = &mut self.screens[screen].annotations;
         list.push(annotation);
         let index = list.len() - 1;
@@ -512,9 +601,9 @@ impl Session {
         })
     }
 
-    /// Records what a mark is on (from the accessibility tree; its frame in this screen's points)
+    /// Records what an annotation is on (from the accessibility tree; its frame in this screen's points)
     /// and how that looks. For an area or a drawing, an element much smaller or larger than what
-    /// was marked only says which app and window it's in.
+    /// was annotated only says which app and window it's in.
     pub fn set_element(&mut self, screen: usize, index: usize, part: Part, element: Element) {
         let Some(a) = self.screens.get_mut(screen).and_then(|s| s.annotations.get_mut(index)) else { return };
         let region = match (&a.shape, a.area) {
@@ -540,7 +629,7 @@ impl Session {
         }
     }
 
-    /// Measures the marked element's colors and padding from the frame.
+    /// Measures the annotated element's colors and padding from the frame.
     fn describe(&mut self, screen: usize, index: usize) {
         let tolerance = self.tolerance;
         let Some(state) = self.screens.get_mut(screen) else { return };
@@ -557,7 +646,7 @@ impl Session {
         state.annotations[index].look = look;
     }
 
-    /// Sets a mark's typed feedback.
+    /// Sets an annotation's typed feedback.
     pub fn set_feedback(
         &mut self,
         screen: usize,
@@ -650,6 +739,7 @@ impl Session {
             for m in list {
                 if !state.held.contains(m) {
                     state.held.push(m.clone());
+                    state.held_times.push(self.clock);
                     self.added.push((screen, Added::Held(state.held.len() - 1)));
                     restored = true;
                 }
@@ -670,11 +760,11 @@ impl Session {
     pub fn markdown(&self, detail: Detail) -> String {
         let mut blocks = Vec::new();
         for (_, inspection) in self.inspections() {
-            let (measured, notes) = markdown(&inspection, detail);
-            blocks.extend(measured);
-            blocks.extend(notes.into_iter().map(|(_, text)| text));
+            let (header, notes) = markdown(&inspection, detail);
+            blocks.extend(header);
+            blocks.extend(notes.into_iter().map(|n| n.text));
         }
-        blocks.join("\n\n")
+        crate::markdown::join_blocks(blocks)
     }
 
     /// Removes the last thing added.
@@ -682,7 +772,10 @@ impl Session {
         let Some((screen, added)) = self.added.pop() else { return false };
         let state = &mut self.screens[screen];
         match added {
-            Added::Held(i) if i < state.held.len() => drop(state.held.remove(i)),
+            Added::Held(i) if i < state.held.len() => {
+                state.held.remove(i);
+                state.held_times.remove(i);
+            }
             Added::Guide(i) if i < state.guides.len() => drop(state.guides.remove(i)),
             Added::Annotation(i) if i < state.annotations.len() => {
                 state.annotations.remove(i);
@@ -713,6 +806,7 @@ impl Session {
     pub fn remove_held(&mut self, screen: usize, index: usize) {
         if self.screens.get(screen).is_some_and(|s| index < s.held.len()) {
             self.screens[screen].held.remove(index);
+            self.screens[screen].held_times.remove(index);
             self.added.retain(|&(s, a)| !(s == screen && a == Added::Held(index)));
             for (s, a) in &mut self.added {
                 if let Added::Held(i) = a
@@ -725,7 +819,7 @@ impl Session {
         }
     }
 
-    /// Marks stay numbered 1, 2, 3… in the order they were put down.
+    /// Annotations stay numbered 1, 2, 3… in the order they were put down.
     fn renumber(&mut self) {
         let mut all: Vec<(u32, usize, usize)> = Vec::new();
         for (s, state) in self.screens.iter().enumerate() {
@@ -743,6 +837,7 @@ impl Session {
     pub fn clear(&mut self) {
         for state in &mut self.screens {
             state.held.clear();
+            state.held_times.clear();
             state.guides.clear();
             state.annotations.clear();
         }
@@ -787,7 +882,7 @@ impl Session {
         Some(m.dimensions(self.screens[screen].screen.scale, self.units))
     }
 
-    /// Everything measured and marked on each screen that has something, as it goes in the aside.
+    /// Everything measured and annotated on each screen that has something, as it goes in the aside.
     pub fn inspections(&self) -> Vec<(usize, Inspection)> {
         self.screens
             .iter()
@@ -802,6 +897,7 @@ impl Session {
                         screen: s.screen.clone(),
                         units: self.units,
                         measurements: s.held.clone(),
+                        measurement_times: s.held_times.clone(),
                         guides: s.guides.clone(),
                         annotations,
                     },
@@ -819,14 +915,18 @@ impl Session {
                 self.normal_tolerance = self.tolerance;
             }
             Action::Units(units) => self.units = *units,
+            // The player waits; the session's clock moves on.
+            Action::Wait(seconds) => self.clock += *seconds as f32,
+            // The player goes back to the live screen, or freezes it again.
+            Action::Live | Action::Freeze => {}
             Action::Click { screen, at } => {
                 self.mouse_down(*screen, at.0, at.1, false);
-                return self.mouse_up(*screen, at.0, at.1, 0.0);
+                return self.mouse_up(*screen, at.0, at.1, self.clock);
             }
             Action::Drag { screen, from, to, snap } => {
                 self.mouse_down(*screen, from.0, from.1, !snap);
                 self.move_to(*screen, to.0, to.1);
-                return self.mouse_up(*screen, to.0, to.1, 0.0);
+                return self.mouse_up(*screen, to.0, to.1, self.clock);
             }
             Action::Objects { screen, from, to } => {
                 let (previous, alternate) = (self.tool, self.alternate);
@@ -852,7 +952,7 @@ impl Session {
             }
             Action::Annotate { screen, at, area, element, comment, intent, severity } => {
                 let previous = self.tool;
-                self.tool = Tool::Mark;
+                self.tool = Tool::Annotate;
                 let placed = match area {
                     Some(r) => self.apply(&Action::Drag {
                         screen: *screen,
@@ -873,7 +973,7 @@ impl Session {
                 for p in &points[1..] {
                     self.move_to(*screen, p.0, p.1);
                 }
-                let placed = self.mouse_up(*screen, last.0, last.1, 0.0);
+                let placed = self.mouse_up(*screen, last.0, last.1, self.clock);
                 (self.tool, self.crosshair) = (previous, crosshair);
                 return self.feedback(placed, element.as_deref(), target.as_deref(), comment, *intent, *severity);
             }
@@ -923,13 +1023,13 @@ fn stop_at(run: &mut Run, along: f64, across: f64, start: f64, end: f64, lo: f64
     }
 }
 
-/// Whether an element's frame is about the size of what was marked (so it's what was marked).
+/// Whether an element's frame is about the size of what was annotated (so it's what was annotated).
 fn fits(frame: PtRect, region: PtRect) -> bool {
     let (a, b) = (frame.width * frame.height, region.width.max(1.0) * region.height.max(1.0));
     a >= b * 0.3 && a <= b * 3.0
 }
 
-/// A scripted step of a session, as JSON: `{"click": {"at": [100, 200]}}`, `{"tool": "mark"}`.
+/// A scripted step of a session, as JSON: `{"click": {"at": [100, 200]}}`, `{"tool": "annotate"}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
@@ -1009,6 +1109,13 @@ pub enum Action {
         #[serde(default)]
         severity: Option<Severity>,
     },
+    /// Seconds to wait before the next step, with the session open (the end-to-end test talks
+    /// meanwhile).
+    Wait(f64),
+    /// Back to the live screen: what's on the frozen one goes in the aside.
+    Live,
+    /// Freeze the screen again (the same image).
+    Freeze,
 }
 
 fn yes() -> bool {
@@ -1041,13 +1148,35 @@ fn px_rect_to_pt(r: Rect, scale: f64) -> PtRect {
     PtRect::new(r.x as f64 / scale, r.y as f64 / scale, r.width as f64 / scale, r.height as f64 / scale)
 }
 
-/// The Markdown for one screen's inspection: where the marks are (when they share an app and a
-/// page) and the measurements, to go with its screenshot; then each mark, as
-/// `(seconds into the session, text)` so the app can place marks by when they were made.
-pub fn markdown(inspection: &Inspection, detail: Detail) -> (Option<String>, Vec<(f32, String)>) {
+/// One measurement or annotation as it goes in the aside, with the moment it was made, so the app
+/// can place it among what was said.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Note {
+    /// Seconds into the session.
+    pub time: f32,
+    pub text: String,
+    /// The annotation's key, and the recordings of what was said about it that `text` has.
+    pub annotation: Option<(u32, Vec<u64>)>,
+}
+
+/// The Markdown for one screen's inspection: what goes with its screenshot (where the annotations
+/// are, when they share an app and a page; the screen and units of the measurements; the guides),
+/// then each measurement and annotation, in the order they were made.
+pub fn markdown(inspection: &Inspection, detail: Detail) -> (Option<String>, Vec<Note>) {
     let header: Vec<String> =
         [inspection.context_markdown(), inspection.measurements_markdown(detail)].into_iter().flatten().collect();
-    let notes = inspection.annotations.iter().map(|a| (a.time, inspection.annotation_markdown(a, detail))).collect();
+    let measured = inspection.measurement_lines().into_iter().enumerate().map(|(i, text)| Note {
+        time: inspection.measurement_times.get(i).copied().unwrap_or_default(),
+        text,
+        annotation: None,
+    });
+    let annotated = inspection.annotations.iter().map(|a| Note {
+        time: a.time,
+        text: inspection.annotation_markdown(a, detail),
+        annotation: Some((a.key, a.said.iter().map(|s| s.take).collect())),
+    });
+    let mut notes: Vec<Note> = measured.chain(annotated).collect();
+    notes.sort_by(|a, b| a.time.total_cmp(&b.time));
     ((!header.is_empty()).then(|| header.join("\n")), notes)
 }
 
@@ -1169,11 +1298,11 @@ mod tests {
         s.snapping = false;
         s.add_guide_at(0, Axis::Y, 3.0, 33.3);
         assert_eq!(s.screens[0].guides[1].position, 33.5);
-        assert!(s.markdown(Detail::Compact).starts_with("**Measured** (pt): Guides: x 10 · y 33.5"));
+        assert_eq!(s.markdown(Detail::Compact), "**Measured** in pt\n**Guides:** x 10 · y 33.5");
     }
 
     #[test]
-    fn marks_are_numbered_described_and_written() {
+    fn annotations_are_numbered_described_and_written() {
         let mut s = session();
         let element = Element {
             app: Some("Safari".into()),
@@ -1205,7 +1334,7 @@ mod tests {
             intent: None,
             severity: Some(Severity::Suggestion),
         });
-        s.tool = Tool::Mark;
+        s.tool = Tool::Annotate;
         assert_eq!(s.apply(&Action::Click { screen: 0, at: (26.0, 21.0) }), Placed::Edit { screen: 0, index: 0 });
         s.remove_annotation(0, 0);
         assert_eq!(s.screens[0].annotations[0].number, 1);
@@ -1213,9 +1342,83 @@ mod tests {
         let inspections = s.inspections();
         let (measured, notes) = markdown(&inspections[0].1, Detail::Standard);
         assert_eq!(measured, None);
-        assert_eq!(notes, [(0.0, "### 1. Area 30 × 30 at (60, 5)\n**Severity:** suggestion".to_string())]);
+        let text = "### 1. Area 30 × 30 at (60, 5)\n**Severity:** suggestion".to_string();
+        assert_eq!(notes, [Note { time: 0.0, text, annotation: Some((2, vec![])) }]);
         s.clear();
         assert!(s.is_empty() && s.inspections().is_empty());
+    }
+
+    #[test]
+    fn freezing_again_goes_on_numbering() {
+        let mut s = session();
+        s.set_tool(Tool::Annotate);
+        s.apply(&Action::Wait(3.0));
+        s.apply(&Action::Click { screen: 0, at: (90.0, 45.0) });
+        let next = s.refrozen(session().screens);
+        assert!(next.is_empty());
+        assert_eq!((next.tool, next.clock), (Tool::Annotate, 3.0));
+        let mut next = next;
+        next.apply(&Action::Click { screen: 0, at: (90.0, 45.0) });
+        let a = &next.screens[0].annotations[0];
+        assert_eq!((a.number, a.key, a.time), (2, 2, 3.0));
+    }
+
+    #[test]
+    fn notes_keep_the_order_things_were_made() {
+        let mut s = session();
+        let script: Vec<Action> = serde_json::from_str(
+            r#"[{"drag": {"from": [10, 5], "to": [70, 40]}}, {"hold": {"axis": "x", "at": [5, 20]}},
+                {"wait": 2}, {"tool": "annotate"}, {"click": {"at": [90, 45]}},
+                {"wait": 1.5}, {"hold": {"axis": "y", "at": [5, 20]}}]"#,
+        )
+        .unwrap();
+        for action in &script {
+            s.apply(action);
+        }
+        assert_eq!(s.screens[0].held_times, [0.0, 0.0, 3.5]);
+        let (header, notes) = markdown(&s.inspections()[0].1, Detail::Compact);
+        assert_eq!(header.as_deref(), Some("**Measured** in pt"));
+        let order: Vec<(f32, &str)> = notes.iter().map(|n| (n.time, &n.text[..5])).collect();
+        assert_eq!(order, [(0.0, "- Are"), (0.0, "- Dis"), (2.0, "1. **"), (3.5, "- Dis")]);
+        assert_eq!(notes[2].annotation, Some((1, vec![])));
+        // Measured one after another: one list.
+        assert!(s.markdown(Detail::Compact).starts_with("**Measured** in pt\n\n- Area 30 × 10 (3:1)"));
+        assert_eq!(s.markdown(Detail::Compact).matches("\n- Distance").count(), 2);
+        // Undo takes the time away with the measurement.
+        s.undo();
+        assert_eq!(s.screens[0].held_times, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn annotating_measured_sections() {
+        let mut s = session();
+        // A section measured as drawn, around the button.
+        s.apply(&Action::Drag { screen: 0, from: (10.0, 5.0), to: (70.0, 40.0), snap: false });
+        let section = PtRect::new(10.0, 5.0, 60.0, 35.0);
+        s.set_tool(Tool::Annotate);
+        assert_eq!(s.section_at(0, 25.0, 20.0), Some(section));
+        // A click in it annotates the section; another one edits that annotation.
+        assert_eq!(s.apply(&Action::Click { screen: 0, at: (60.0, 30.0) }), Placed::Annotation { screen: 0, index: 0 });
+        assert_eq!(s.screens[0].annotations[0].area, Some(section));
+        assert_eq!(s.apply(&Action::Click { screen: 0, at: (65.0, 35.0) }), Placed::Edit { screen: 0, index: 0 });
+        // The element under the pointer, much smaller than the section, is annotated instead.
+        s.element = Some((0, PtRect::new(20.0, 15.0, 30.0, 10.0)));
+        assert_eq!(s.section_at(0, 25.0, 20.0), None);
+        assert_eq!(s.apply(&Action::Click { screen: 0, at: (25.0, 20.0) }), Placed::Annotation { screen: 0, index: 1 });
+        assert_eq!((s.screens[0].annotations[1].at, s.screens[0].annotations[1].area), ((25.0, 20.0), None));
+        // A section snapped to the button (detected): the smallest section there, and about the
+        // element's size, so it's the section. The context menu annotates a held one.
+        s.set_tool(Tool::Measure);
+        s.apply(&Action::Drag { screen: 0, from: (15.0, 12.0), to: (55.0, 30.0), snap: true });
+        let button = PtRect::new(20.0, 15.0, 30.0, 10.0);
+        assert_eq!(s.screens[0].held[1], Measurement::Area { rect: button, snapped: true });
+        assert_eq!(s.section_at(0, 25.0, 20.0), Some(button));
+        assert_eq!(s.annotate_held(0, 1, 2.0), Placed::Annotation { screen: 0, index: 2 });
+        assert_eq!(s.screens[0].annotations[2].area, Some(button));
+        assert_eq!(s.annotate_held(0, 1, 3.0), Placed::Edit { screen: 0, index: 2 });
+        // Elsewhere, Annotate Here annotates the element under it.
+        assert_eq!(s.annotate_at(0, 90.0, 45.0, 4.0), Placed::Annotation { screen: 0, index: 3 });
+        assert_eq!(s.screens[0].annotations[3].area, None);
     }
 
     #[test]
@@ -1267,12 +1470,12 @@ mod tests {
         // All in Mail: said once, with the screenshot.
         assert_eq!(header.as_deref(), Some("**In:** Mail"));
         assert_eq!(
-            notes[0].1,
+            notes[0].text,
             "### 1. Arrow from button \"Save\" to toolbar\n**From → to:** (25, 20) → (80, 40)\n**Intent:** change\n\
              **Feedback:** Move it here"
         );
-        assert_eq!(notes[1].1, "### 2. Drawn on button \"Save\"");
-        assert_eq!(notes[2].1, "### 3. Drawn around 98 × 48 at (1, 1)");
+        assert_eq!(notes[1].text, "### 2. Drawn on button \"Save\"");
+        assert_eq!(notes[2].text, "### 3. Drawn around 98 × 48 at (1, 1)");
         // A click with the Draw tool on a marker edits it; elsewhere it does nothing.
         s.set_tool(Tool::Draw);
         assert_eq!(s.apply(&Action::Click { screen: 0, at: (25.0, 20.0) }), Placed::Edit { screen: 0, index: 0 });
@@ -1282,10 +1485,10 @@ mod tests {
     #[test]
     fn screenshots_go_back_to_the_tool() {
         let mut s = session();
-        s.set_tool(Tool::Mark);
+        s.set_tool(Tool::Annotate);
         let placed = s.apply(&Action::Shot { screen: 0, from: (90.0, 40.0), to: (120.0, 60.0) });
         assert_eq!(placed, Placed::Shot { screen: 0, rect: PtRect::new(90.0, 40.0, 10.0, 10.0) });
-        assert_eq!(s.tool, Tool::Mark);
+        assert_eq!(s.tool, Tool::Annotate);
         s.apply(&Action::Drag { screen: 0, from: (10.0, 5.0), to: (70.0, 40.0), snap: true });
         s.tool = Tool::Measure;
         s.apply(&Action::Drag { screen: 0, from: (10.0, 5.0), to: (70.0, 40.0), snap: true });
@@ -1317,11 +1520,13 @@ mod tests {
             r#"[{"tool": "annotate"}, {"tolerance": 10}, {"units": "px"}, {"click": {"at": [5, 20]}},
                 {"drag": {"from": [10, 5], "to": [70, 40]}}, {"guide": {"axis": "y", "at": [5, 14]}},
                 {"annotate": {"at": [25, 20], "comment": "Hi", "intent": "question"}},
-                {"hold": {"axis": "x", "at": [5, 20]}}, {"draw": {"points": [[1, 1], [9, 9]], "arrow": true}}]"#,
+                {"hold": {"axis": "x", "at": [5, 20]}}, {"draw": {"points": [[1, 1], [9, 9]], "arrow": true}},
+                {"wait": 1.5}, "live", "freeze"]"#,
         )
         .unwrap();
-        assert_eq!(script[0], Action::Tool(Tool::Mark));
+        assert_eq!(script[0], Action::Tool(Tool::Annotate));
         assert_eq!(script[4], Action::Drag { screen: 0, from: (10.0, 5.0), to: (70.0, 40.0), snap: true });
+        assert_eq!(script[9..], [Action::Wait(1.5), Action::Live, Action::Freeze]);
         let parsed = Script::parse(r#"{"actions": [{"tool": "measure"}]}"#).unwrap();
         assert_eq!((parsed.scale, parsed.actions), (1.0, vec![Action::Tool(Tool::Measure)]));
         assert!(Script::parse(r#"{"scale": 0, "actions": []}"#).is_err());

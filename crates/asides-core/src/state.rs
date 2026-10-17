@@ -31,12 +31,17 @@ pub struct AppState {
     pub target_session: Option<String>,
     /// The user declined to put the `asides` command in /usr/local/bin; don't ask again.
     pub command_link_declined: bool,
-    /// Measure & Annotate showed its keys once, the first time it opened.
+    /// Asides showed its keys once, the first time a screen was frozen.
     pub overlay_tips_seen: bool,
+    /// Where the user put Asides' toolbar: its center, as a fraction of the screen's width and
+    /// height (`None`: at the bottom, in the middle).
+    pub toolbar_at: Option<(f64, f64)>,
+    /// The toolbar folded to its handle and microphone.
+    pub toolbar_collapsed: bool,
     pub updated_ms: u64,
 }
 
-/// Marks the end of a batch: the entries of `dir`'s notes up to entry `entry` of `note` (a note
+/// The end of a batch: the entries of `dir`'s notes up to entry `entry` of `note` (a note
 /// folder), all of them transcribed by the time it was published.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

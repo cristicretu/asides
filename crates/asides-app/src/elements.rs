@@ -48,8 +48,9 @@ pub struct WindowInfo {
     pub layer: i64,
 }
 
-/// The windows on screen now, frontmost first, without this app's.
-pub fn windows() -> Vec<WindowInfo> {
+/// The windows on screen now, frontmost first, without this app's or process `without`'s (the
+/// overlay's).
+pub fn windows(without: Option<i32>) -> Vec<WindowInfo> {
     let options = CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let Some(list) = CGWindowListCopyWindowInfo(options, kCGNullWindowID) else { return Vec::new() };
     // CFArray of CFDictionary is toll-free bridged with NSArray of NSDictionary.
@@ -65,7 +66,7 @@ pub fn windows() -> Vec<WindowInfo> {
             get(key).and_then(|o| o.downcast::<NSString>().ok()).map(|s| s.to_string()).filter(|s| !s.is_empty())
         };
         let Some(pid) = number(get("kCGWindowOwnerPID")) else { continue };
-        if pid as i32 == me || number(get("kCGWindowAlpha")).is_some_and(|a| a <= 0.0) {
+        if pid as i32 == me || Some(pid as i32) == without || number(get("kCGWindowAlpha")).is_some_and(|a| a <= 0.0) {
             continue;
         }
         let Some(bounds) = get("kCGWindowBounds").and_then(|o| o.downcast::<NSDictionary>().ok()) else { continue };

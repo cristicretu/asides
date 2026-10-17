@@ -27,13 +27,15 @@ pub struct Spec {
     pub units: Units,
     pub tolerance: u8,
     pub detail: Detail,
-    /// Points of screen kept around what's marked, in the image added to the aside.
+    /// Points of screen kept around what's annotated, in the image added to the aside.
     pub padding: f64,
-    /// Ask the app to name the element under each mark.
+    /// Ask the app to name the element under each annotation.
     pub identify: bool,
     pub keys: OverlayKeys,
-    /// The record shortcut, as shown (`⌃⌥Space`), for the toolbar's hint.
+    /// The Asides shortcut, as shown (`⌃⌥Space`), for the toolbar's hint.
     pub record_shortcut: String,
+    /// The freeze shortcut, as shown (`⌃⌥P`), for the toolbar's hints.
+    pub freeze_shortcut: String,
     /// Seconds recorded so far when a recording is under way.
     pub recording: Option<f32>,
     /// Agents get asides in batches (Send to Agent), so the toolbar offers Send; otherwise each
@@ -57,6 +59,11 @@ pub struct Spec {
     /// Development: mouse and key steps to play in the windows, with screenshots of them (see the
     /// overlay's `replay`), to check what the user would see.
     pub replay: Option<serde_json::Value>,
+    /// Open over the live screen (a toolbar only), not frozen: the screens have no pixels yet.
+    pub live: bool,
+    /// Where the toolbar goes, and folded (`AppState::toolbar_at`, `toolbar_collapsed`).
+    pub toolbar_at: Option<(f64, f64)>,
+    pub toolbar_collapsed: bool,
 }
 
 /// One frozen screen.
@@ -83,8 +90,23 @@ pub enum Event {
     Ready,
     /// Name the element at this point (global points); answered with `Command::Element`.
     Identify { id: u64, x: f64, y: f64 },
-    /// The talk key or the microphone button went down or up (hold to talk, tap to toggle).
-    Talk { down: bool },
+    /// The talk key or a microphone button went down or up (hold to talk, tap to toggle). From an
+    /// annotation's card (its key), what's said is about that annotation: transcribed for it.
+    Talk {
+        down: bool,
+        #[serde(default)]
+        annotation: Option<u32>,
+    },
+    /// Stop recording (an annotation's card closed while recording for it).
+    Stop,
+    /// Throw away what was said about this annotation (to say it again).
+    Unsay { annotation: u32 },
+    /// Freeze the screens: answered with `Command::Frozen`.
+    Freeze,
+    /// Back to the live screen (give the keyboard back to the app that had it).
+    Live,
+    /// The user moved or folded the toolbar (remembered for next time).
+    ToolbarPlaced { at: Option<(f64, f64)>, collapsed: bool },
     /// The user showed or hid the toolbar (remembered for next time).
     Toolbar { shown: bool },
     /// Something was put on the clipboard (not a screenshot to attach).
@@ -103,12 +125,31 @@ pub enum Command {
         id: u64,
         element: Option<Box<Element>>,
     },
-    /// Recording (seconds so far), or not.
+    /// Recording (seconds so far), or not, and for which annotation (from its card).
     Recording {
         seconds: Option<f32>,
+        #[serde(default)]
+        annotation: Option<u32>,
     },
-    /// The Measure & Annotate shortcut again: add what's there to the aside.
+    /// What was said about an annotation (recording `take`) is being transcribed...
+    Transcribing {
+        annotation: u32,
+        take: u64,
+    },
+    /// ...and this is its transcript.
+    Said {
+        annotation: u32,
+        take: u64,
+        text: String,
+    },
+    /// The Asides shortcut tapped again: add it all to the aside.
     Finish,
+    /// The freeze shortcut: freeze the screens, or back to live.
+    ToggleFreeze,
+    /// The screens, frozen (their pixels are files in the session directory).
+    Frozen {
+        screens: Vec<SpecScreen>,
+    },
     /// Close without adding anything.
     Close,
     /// Something the user should know while the overlay covers the menu bar (an error).
@@ -136,6 +177,10 @@ pub struct Item {
     pub time: f32,
     pub image: Option<String>,
     pub text: Option<String>,
+    /// An annotation's key, for what was said about it that `text` doesn't have yet (recordings
+    /// other than `said`, still being transcribed).
+    pub annotation: Option<u32>,
+    pub said: Vec<u64>,
 }
 
 /// One JSON line.
@@ -155,10 +200,17 @@ mod tests {
         );
         assert_eq!(line(&Event::Ready), r#"{"type":"ready"}"#);
         let command: Command = serde_json::from_str(r#"{"type":"recording","seconds":4.5}"#).unwrap();
-        assert_eq!(command, Command::Recording { seconds: Some(4.5) });
+        assert_eq!(command, Command::Recording { seconds: Some(4.5), annotation: None });
+        assert_eq!(
+            line(&Event::Talk { down: true, annotation: Some(2) }),
+            r#"{"type":"talk","down":true,"annotation":2}"#
+        );
+        let said: Command =
+            serde_json::from_str(r#"{"type":"said","annotation":2,"take":7,"text":"Bigger."}"#).unwrap();
+        assert_eq!(said, Command::Said { annotation: 2, take: 7, text: "Bigger.".into() });
         let element: Command = serde_json::from_str(r#"{"type":"element","id":1,"element":null}"#).unwrap();
         assert_eq!(element, Command::Element { id: 1, element: None });
         let spec: Spec = serde_json::from_str(r#"{"screens": [], "tolerance": 4}"#).unwrap();
-        assert_eq!((spec.tolerance, spec.identify, spec.keys.mark.as_str()), (4, false, "a"));
+        assert_eq!((spec.tolerance, spec.identify, spec.keys.annotate.as_str()), (4, false, "a"));
     }
 }

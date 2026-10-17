@@ -102,7 +102,7 @@ check "front matter: git remote" contains "$NOTE" 'remote: "git@github.com:acme/
 check "front matter: commit subject" contains "$NOTE" "commit_subject: Fix cart total rounding"
 check "front matter: macOS version" grep -q "^  macos: " "$NOTE"
 check "front matter: display" grep -q "^  display: [0-9]*x[0-9]* @" "$NOTE"
-check "front matter: transcription" contains "$NOTE" "whisper large-v3-turbo (local)"
+check "front matter: transcription" grep -q '^transcription: asides [0-9.]* · whisper [a-z0-9.-]* (local)$' "$NOTE"
 check "English transcript" contains "$NOTE" "padding on the summary card"
 check "screenshot linked" grep -q '^!\[[0-9:]*\](images/01-[0-9]*\.png)$' "$NOTE"
 check "screenshot saved unchanged" cmp "$FIX/screenshot.png" "$(dirname "$NOTE")/$(sed -n 's/^!\[.*\](\(images\/.*\))$/\1/p' "$NOTE" | head -1)"
@@ -174,13 +174,13 @@ JSON
 "$CLI" simulate-measure "$SHOT" "$WORK/session.json" >/dev/null
 wait_for "$NOTE2" "· Screen"
 check "a session outside a recording is an entry of its own" grep -q '^## 4 · [0-9:]* · Screen$' "$NOTE2"
-check "measurements, in points, with the screen" contains "$NOTE2" "**Measured** in pt (screen: Simulated screen, 400 × 240 pt, @2x):"
+check "measurements, in points, with the screen" contains "$NOTE2" "**Measured** in pt (screen: Simulated screen, 400 × 240 pt, @2x)"
 check "a held distance between edges" contains "$NOTE2" "- Distance from (100, 140): 320 across (x 40 to x 360), 82 down (y 88 to y 170)"
 check "an area snapped to the button" contains "$NOTE2" "- Area 100 × 24 (25:6) at (60, 170), snapped to the object inside"
-check "a guide snapped to the text's edge" contains "$NOTE2" "- Guides: x 60"
+check "a guide snapped to the text's edge" contains "$NOTE2" "**Guides:** x 60"
 check "an annotation on an element, with its location" contains "$NOTE2" "**Location:** form > button#save.btn"
 check "its feedback, intent and severity" contains "$NOTE2" "**Intent:** fix · **Severity:** important"
-check "an area mark" contains "$NOTE2" "### 2. Area 110 × 50 at (250, 40)"
+check "an area annotation" contains "$NOTE2" "### 2. Area 110 × 50 at (250, 40)"
 check "an arrow, from one element to another" contains "$NOTE2" "### 3. Arrow from button \"Save\" to heading \"Profile\""
 check "with where it goes" contains "$NOTE2" "**From → to:** (110, 182) → (300, 110)"
 check "the screenshot and the Shot tool's, in the order they were made" \
@@ -188,6 +188,40 @@ check "the screenshot and the Shot tool's, in the order they were made" \
 SCREEN_PNG="$(dirname "$NOTE2")/$(sed -n 's/^!\[.*\](\(images\/04-.*\.png\))$/\1/p' "$NOTE2" | head -1)"
 check "the annotated screenshot is saved" test -s "$SCREEN_PNG"
 check "asides measure finds the button in the screenshot" grep -q "200 px wide × 48 px high" <<<"$("$CLI" measure "$SHOT" 100,320,240,100)"
+
+echo "Talking in Asides, frozen twice"
+# The button measured and annotated (a click inside it) at once; something said about the
+# annotation from its card at 1 s; back to the live screen; talking at 2 s (8 s of it); frozen
+# again, and a distance measured at 14 s.
+cat > "$WORK/talk.json" <<'JSON'
+{"scale": 2, "actions": [
+  {"drag": {"from": [50, 160], "to": [175, 205]}},
+  {"tool": "annotate"}, {"click": {"at": [140, 185]}},
+  "live",
+  {"wait": 14},
+  "freeze",
+  {"hold": {"axis": "x", "at": [100, 140]}},
+  {"wait": 2}
+]}
+JSON
+"$CLI" simulate-measure "$SHOT" "$WORK/talk.json" >/dev/null
+sleep 1
+"$CLI" simulate "$FIX/en_bug.wav" --annotation 1 >/dev/null
+sleep 1
+"$CLI" simulate "$FIX/ro_bug.wav" >/dev/null
+wait_for "$NOTE2" "## 5 ·"
+sleep 2
+sed -n '/^## 5 · /,$p' "$NOTE2" > "$WORK/entry5.md"
+line() { grep -nF -- "$1" "$WORK/entry5.md" | head -1 | cut -d: -f1; }
+check "what was said and what was done are one entry" grep -q '^## 5 · [0-9:]*$' "$NOTE2"
+check "nothing written on its own" test "$(grep -c '^## ' "$NOTE2")" = 5
+check "a click in a measured section annotates the section" contains "$WORK/entry5.md" "### 1. Area 100 × 24 at (60, 170)"
+check "what was said about the annotation is in it" grep -q '^\*\*Said:\*\* .*padding on the summary card' "$WORK/entry5.md"
+check "in the order it happened: measured, annotated, talked, measured" test \
+    "$(line '- Area 100 × 24')" -lt "$(line '### 1. Area')" -a "$(line '### 1. Area')" -lt "$(line 'Butonul de salvare')" \
+    -a "$(line 'Butonul de salvare')" -lt "$(line '- Distance from (100, 140)')"
+check "a screenshot for each freeze, the second after what was said" test \
+    "$(grep -c '^!\[' "$WORK/entry5.md")" = 2 -a "$(grep -n '^!\[' "$WORK/entry5.md" | tail -1 | cut -d: -f1)" -gt "$(line 'Butonul de salvare')"
 
 echo "Status, export, git hygiene"
 check "status shows the binding" grep -q "bound to .*/shop" <<<"$("$CLI" status)"

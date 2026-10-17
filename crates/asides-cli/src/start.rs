@@ -153,8 +153,8 @@ pub fn run(kind: AgentKind, start: &Path, options: Options) -> Result<()> {
     println!("Starting {} in {place}, listening for your asides.", kind.name());
     match reached {
         Ok(()) => println!(
-            "  {} talk to it · {} switch sessions · notes in {}/.asides",
-            pretty_shortcut(&config.shortcuts.record),
+            "  {} open Asides to talk to it · {} switch sessions · notes in {}/.asides",
+            pretty_shortcut(&config.shortcuts.asides),
             pretty_shortcut(&config.shortcuts.next_target),
             tilde(&repo)
         ),

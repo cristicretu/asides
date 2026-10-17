@@ -77,9 +77,9 @@ deleted.
 
 | Layer | Command | Covers |
 |---|---|---|
-| Unit | `make test` | notes, metadata, Markdown, git info, links, state, config, resampling, language choice, icon rendering, measuring (edges, snapping, guides, colors), the Measure & Annotate session (measuring, holds, guides, marks, drawings, screenshots, restore) and its Markdown, the overlay's keys and protocol, rendering a session's screenshot offscreen, threads, the MCP feedback-loop tools, `asides measure` |
+| Unit | `make test` | notes, metadata, Markdown, git info, links, state, config, resampling, language choice, icon rendering, measuring (edges, snapping, guides, colors), the Asides session (measuring, holds, guides, annotations, drawings, screenshots, restore, freezing again) and its Markdown, the overlay's keys and protocol, rendering a session's screenshot offscreen, threads, the MCP feedback-loop tools, `asides measure` |
 | Speech | `make test-speech` | transcription of the fixtures (needs the model) and a real model download with checksum check (190 MB) |
-| End-to-end | `make e2e` | installs a build with the `dev-hooks` feature, then drives it through the `asides` command in a throwaway git repo, feeding WAV files instead of the microphone (`asides simulate`), a scripted Measure & Annotate session on a drawn screen instead of the real one (`asides simulate-measure`, played by the bundled `asides-overlay` without windows), a database of its own instead of Wispr Flow's history, and `scripts/e2e-mcp.py` as a coding agent (listening making its session the target, each and batch delivery, two sessions in one repo each getting only their own asides, Send to Agent, cancelling, `asides listen`, sending with no agent listening, resolving, dismissing and replying to marks, `measure_image`), plus fake agents for `asides claude`, `codex` and `opencode` (their command lines, worktrees for a second session, pruning them; a fake Codex daemon and `codex queue` for pushed Codex sessions, in a window and in the background, and the fallback without the daemon). It restores your `config.toml` afterwards |
+| End-to-end | `make e2e` | installs a build with the `dev-hooks` feature, then drives it through the `asides` command in a throwaway git repo, feeding WAV files instead of the microphone (`asides simulate`), a scripted Measure & Annotate session on a drawn screen instead of the real one (`asides simulate-measure`, played by the bundled `asides-overlay` without windows; and one with recordings arriving while it's open, one of them about an annotation, which make one entry in the order things happened), a database of its own instead of Wispr Flow's history, and `scripts/e2e-mcp.py` as a coding agent (listening making its session the target, each and batch delivery, two sessions in one repo each getting only their own asides, Send to Agent, cancelling, `asides listen`, sending with no agent listening, resolving, dismissing and replying to annotations, `measure_image`), plus fake agents for `asides claude`, `codex` and `opencode` (their command lines, worktrees for a second session, pruning them; a fake Codex daemon and `codex queue` for pushed Codex sessions, in a window and in the background, and the fallback without the daemon). It restores your `config.toml` afterwards |
 | Overlay replay | below | the real overlay windows, driven by AppKit mouse and key events, captured to PNGs you look at |
 | Manual | checklist below | everything a script can't do: the microphone, shortcuts, menus, your own hand on the overlay, and permissions |
 
@@ -91,15 +91,16 @@ ASIDES_ICON_DUMP=/tmp/icons cargo test -p asides-app icons
 
 This writes raw RGBA data (`<symbol>-<width>x<height>.rgba`) for each icon.
 
-If a release is also installed (say `/Applications/Asides.app`), it has the same bundle ID, and
-Launch Services may open it instead of your build when the CLI sends a link. Set
-`ASIDES_APP=~/Applications/Asides.app` to send the CLI's links to your build; `make e2e` does.
+If a release is also installed (say `/Applications/Asides.app`), it has the same bundle ID. The
+CLI sends its links to the app it ships in (`asides` from `~/.local/bin` reaches your build), or to
+`ASIDES_APP`; `make e2e` sets it. Opened from Spotlight or Finder, either copy may start, and two
+copies fight over the shortcuts: quit the one you're not testing.
 
 To look at the image an aside gets from Measure & Annotate (a scripted session on a drawn screen,
 rendered offscreen by the overlay's exporter):
 
 ```bash
-ASIDES_OVERLAY_DUMP=/tmp/overlay cargo test -p asides-overlay renders_marks
+ASIDES_OVERLAY_DUMP=/tmp/overlay cargo test -p asides-overlay renders_annotations
 ```
 
 It writes `session.png`. To try a session of your own on any screenshot, with an installed
@@ -110,7 +111,9 @@ asides simulate-measure shot.png script.json   # {"scale": 2, "actions": [{"drag
 ```
 
 The actions are `click`, `drag`, `objects`, `hold`, `guide`, `annotate`, `draw`, `shot`, `tool`,
-`tolerance` and `units`; see `overlay::Action`.
+`tolerance`, `units` and `wait` (seconds with the session open: `asides simulate` meanwhile is said
+in it, and `asides simulate --annotation N` about annotation N, as the end-to-end test does); see
+`overlay::Action`.
 
 To see and drive the overlay itself, run `target/debug/asides-overlay <dir>` on a session
 directory of your own: `session.json` (`helper::Spec`) with a screen whose `pixels` file holds
@@ -135,19 +138,20 @@ in your pull request what you tried.
 - [ ] **First launch after `tccutil reset Microphone io.github.mihaicristianfarcas.asides`:**
   the microphone prompt names Asides, not your terminal.
 - [ ] **Shortcuts with a browser in front, including full screen:**
-  - `⌃⌥Space` tap starts, a second tap stops
-  - holding `⌃⌥Space` records until release
-  - `⌃⌥N` records into a new note
-  - `Esc` cancels and writes nothing
-  - Esc still works normally in other apps afterwards
-- [ ] **Screenshots:** `⌃⇧⌘4` while recording is placed at the right sentence; `⌃⌥V` while idle
-  appends to the note.
+  - `⌃⌥Space` opens Asides frozen, its toolbar at the bottom of the screen with the mouse
+  - holding `⌃⌥Space` (open or not) talks until release, the first words included while the screen
+    freezes; then a tap adds it all to the note
+  - `⌃⌥N` does the same into a new note
+  - `⌃⌥P` goes live: only the toolbar, and the browser takes clicks and typing (Esc too); again,
+    frozen
+- [ ] **Screenshots:** `⌃⇧⌘4` while talking is placed at the right sentence; `⌃⌥V` with Asides open
+  goes in its aside; closed, it appends to the note.
 - [ ] **Menu:**
   - the icon states: idle, red with a timer, ellipsis, `✓ #N`, warning
   - Directory switching: recent repos and Choose Directory… (focus returns to your previous app)
   - every Preferences item is saved to `config.toml`
 - [ ] **Robustness:**
-  - a recording started while the previous one is still transcribing
+  - Asides opened, and talked in, while the previous aside is still transcribing
   - AirPods as the microphone
   - sleep while recording
   - the bound directory deleted while the app runs
@@ -180,13 +184,25 @@ in your pull request what you tried.
   isn't asked again. The app icon shows in Spotlight and Finder.
 - [ ] **Wispr Flow:** with Add Wispr Flow Dictations on, a dictation lands in the note marked
   `· Wispr Flow`; with it off, nothing does.
-- [ ] **Measure & Annotate, first use after `tccutil reset ScreenCapture io.github.mihaicristianfarcas.asides`:**
-  `⌃⌥M` asks for Screen Recording (naming Asides), and says what to do; after allowing it (and
-  reopening Asides), `⌃⌥M` freezes every screen.
-- [ ] **Measure & Annotate, opening** (with a browser in front, on a laptop and a second display,
-  and over a full-screen app): every screen freezes within a second, the toolbar is on the screen
-  with the mouse, no Dock icon appears, keys work without clicking first, and closing gives the
-  focus back to the browser. The keys sheet shows the first time only.
+- [ ] **Freezing, first use after `tccutil reset ScreenCapture io.github.mihaicristianfarcas.asides`:**
+  `⌃⌥Space` asks for Screen Recording (naming Asides), and says what to do; after allowing it (and
+  reopening Asides), it freezes every screen.
+- [ ] **Live and frozen** (with a browser in front, on a laptop and a second display, and over a
+  full-screen app):
+  - opening freezes every screen within a second; keys work without clicking first; no Dock icon
+    appears; the keys sheet shows the first time only
+  - frozen, the Dock doesn't slide in (pointer at the screen's edge); ⌘Tab, the three- and
+    four-finger swipes (Mission Control, App Exposé, switching spaces), the Show Desktop pinch and
+    hot corners do nothing; Force Quit still works; live, everything works again
+  - ▶ or `⌃⌥P` goes live with the keyboard in the browser; the live toolbar stays above the
+    browser, and clicking it doesn't take the keyboard from it
+  - a tool (or ⏸) freezes again with that tool picked, without the toolbar in the screenshot;
+    Done: one entry, a screenshot for each freeze, in order
+  - drag the toolbar by its handle, live and frozen; fold and unfold it; both are remembered next
+    time
+  - × closes without adding anything; so does Esc on a frozen screen, at once with nothing done,
+    otherwise on a second press (the first says so)
+  - live, typing in the browser (Esc, Space, letters) never reaches Asides
 - [ ] **Measure & Annotate, measuring:**
   - moving shows the distances across and down in one pill, matching what the page's CSS says
   - click holds them; `H`/`V` hold one; a drag around a button snaps to it; right-drag and ⌘-drag
@@ -197,25 +213,47 @@ in your pull request what you tried.
   - `⌘C` puts `W × H` on the clipboard; `C` the image (and it isn't attached twice while recording)
   - right-click: the menu; on a held object, its screenshot; its camera on hover
   - `⌫` undoes, `X` clears, `Tab` hides everything, `R` restores the last session's guides
-- [ ] **Measure & Annotate, marking and drawing:**
+- [ ] **Measure & Annotate, annotating and drawing:**
   - `A`, then click a button in Safari or Chrome: marker 1, the card takes typing right away (with
-    diacritics, an input method, and ⌘V), Return saves it, the dots and `⌘1`–`⌘4` pick a kind, its
-    microphone starts and stops recording, `⌫` over a marker removes it
+    diacritics, an input method, and ⌘V), long text wraps and the card grows, the dots and
+    `⌘1`–`⌘4` pick a kind, `⌫` over a marker removes it
+  - Return, Esc or a click elsewhere closes the card and keeps the annotation and its text; a click
+    elsewhere also places the next annotation; clicking the number opens the card again
+  - in the card, hold Space and speak: it talks about the annotation; a tap types a space, also
+    while typing fast
+  - starting and stopping speaking in a card doesn't flash or move its text field (also near the
+    bottom of the screen, where the card opens above the annotation)
+  - the card's microphone: tap, speak, tap: "Transcribing…", then what you said in the card, and a
+    trash button beside the microphone; the trash deletes it; speaking again adds to it. Close the
+    card while it's transcribing and annotate something else: the first card has its words later
+  - measure an area (`D`, drag), then `A`: hovering inside it outlines it in blue, and a click
+    annotates the area (a second click edits that annotation); with Identify UI Elements on, a
+    button inside a large section is outlined and annotated instead
+  - right-click a measured area: Annotate This opens the card on the area; elsewhere, Annotate
+    Here annotates what's under the pointer
   - with Identify UI Elements on (and Accessibility allowed), hovering outlines elements and the
     entry names the button, the page's URL and a selector with the DOM's classes
   - `P`: a circle around a heading names it; a ⇧-drag arrow names both ends
   - `⌘S`: a dragged screenshot is on the clipboard, and in the aside after Done
-- [ ] **Measure & Annotate, toolbar and keys:** icons only, names on hover; hovering `?` shows the
-  keys; `⇧Tab` hides the toolbar (a timer stays while recording) and it stays hidden next time.
+- [ ] **Toolbar and keys:** icons only, names on hover; hovering `?` shows the keys; on a frozen
+  screen `⇧Tab` hides the toolbar (a timer stays while recording) and it stays hidden next time.
 - [ ] **No repo:** with Asides unbound (or bound to a deleted folder), the menu bar shows "No repo";
-  the overlay says so at the top, and Space, the microphone and Done say why they don't act.
-- [ ] **Measure & Annotate, talking:**
-  - hold Space and speak, mark two things, let go: the toolbar showed the time; Done writes one
-    entry with the transcript, the screenshot, and each mark where you were speaking about it
-  - tap the microphone to start, mark, tap to stop, keep marking, Done
+  a frozen screen says so at the top, and Space, the microphone and Done say why they don't act.
+- [ ] **Talking:**
+  - live (▶), hold `⌃⌥Space`, speak while clicking through the browser, let go, then freeze,
+    annotate, Done: one entry, what you said between the two screenshots
+  - frozen, hold Space and speak, measure something and annotate two things, let go: the toolbar
+    showed the time; Done writes one entry with the transcript, the screenshot, and each
+    measurement and annotation where you were speaking about it
+  - tap the toolbar's microphone to start, annotate, tap to stop, keep annotating, Done
+  - with hold to talk: hold Space, speak, let go ("Kept for the aside"), measure, hold Space again,
+    speak, let go, Done: one entry, each time you spoke a paragraph, the measurement between them,
+    and no entry before Done
+  - an annotation's card microphone, then Done before it's transcribed: one entry, the annotation
+    with `**Said:**` and what you said
   - `⌘⏎` (Send) in batch mode: the entry is written and sent to the listening agent
-  - Esc closes without adding, cancels a recording started in it, and Esc works in other apps after
-  - `⌃⌥M` while it's open adds what's there, like Done
+  - × closes without adding, cancels a recording started in it and drops what was said in it
+  - a tap on `⌃⌥Space` while it's open adds it all, like Done
 - [ ] **Agent replies:** an agent's `resolve_aside` flashes `✓ #N` in the menu bar and shows under
   Agent Replies; the note line counts the open asides.
 

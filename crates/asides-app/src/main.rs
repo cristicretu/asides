@@ -1,7 +1,7 @@
 //! Asides: menu-bar app that records spoken bug reports and appends them, transcribed locally,
 //! to the latest note in the directory bound with the `asides` CLI. Measure & Annotate freezes the
-//! screen to measure, mark, draw on and talk about it (its overlay is a separate process,
-//! `asides-overlay`); what's marked lands among what was said. Each aside goes to one agent
+//! screen to measure, annotate, draw on and talk about it (its overlay is a separate process,
+//! `asides-overlay`); what's annotated lands among what was said. Each aside goes to one agent
 //! session, the target (or to the notes only); New Agent Session starts one.
 
 mod audio;
@@ -31,7 +31,7 @@ use asides_core::config::{AgentDelivery, Config};
 use asides_core::helper::{
     Command as OverlayCommand, Event as OverlayEvent, Outcome as OverlayOutcome, Spec, SpecScreen,
 };
-use asides_core::inspect::{PtRect, Screen, Units};
+use asides_core::inspect::{self, PtRect, Screen, Units};
 use asides_core::install;
 use asides_core::launch::{self, AgentKind};
 use asides_core::link::Link;
@@ -43,6 +43,7 @@ use asides_core::project;
 use asides_core::routes::Route;
 use asides_core::sessions::{self, Session, SessionState};
 use asides_core::state::{self as app_state, AgentSend, AppState, PendingNew};
+use asides_core::takes;
 use asides_core::threads::{self, Event as ThreadEvent, Role, Status};
 use asides_core::wispr::{self, Dictation};
 use chrono::{DateTime, Local};
@@ -63,7 +64,7 @@ use crate::macos::{CommandLink, Mic};
 use crate::overlay::{Message as OverlayMessage, Overlay};
 use crate::stt::{ModelManager, ModelState};
 use crate::tray::{MenuAction, TargetRow, Tray, View};
-use crate::worker::{CapturedImage, DictationJob, ImageJob, Job, Outcome, RecordingJob, ScreenJob};
+use crate::worker::{CapturedImage, DictationJob, ImageJob, Job, Outcome, RecordingJob, ScreenJob, TranscribeJob};
 
 /// A press shorter than this toggles recording; a longer one is push-to-talk.
 const TAP_MAX: Duration = Duration::from_millis(350);
@@ -120,6 +121,51 @@ struct Recording {
     /// The shortcut press that started it, for hold-to-talk.
     pressed: Option<(Action, Instant)>,
     clipboard: isize,
+    /// Started from an annotation's card in Measure & Annotate (its key): what's said is about it.
+    annotation: Option<u32>,
+}
+
+/// A recording that ended while Measure & Annotate was open. What's said in a session waits for
+/// it to end, to make one aside with what was annotated (`asides_core::takes`).
+struct Take {
+    started_at: Instant,
+    started: DateTime<Local>,
+    dir: PathBuf,
+    new_note: Option<Option<String>>,
+    route: Option<Route>,
+    images: Vec<CapturedImage>,
+    texts: Vec<(f32, String)>,
+    environment: Environment,
+    samples: Vec<f32>,
+    sample_rate: u32,
+    /// It was under way before the session opened: Esc keeps it, as a recording of its own.
+    carried: bool,
+    annotation: Option<u32>,
+}
+
+/// A finished Measure & Annotate session waiting for what was said about its annotations to be
+/// transcribed, to add it all at once.
+struct Finishing {
+    outcome: OverlayOutcome,
+    images: Vec<Option<Vec<u8>>>,
+    /// What was said in it, or `None` when nothing was: its annotations go into the recording that
+    /// was under way when it opened (`opened_offset` into it), or make an entry of their own.
+    takes: Option<Vec<Take>>,
+    origin: Instant,
+    opened_offset: Option<f32>,
+    send: bool,
+    /// Its recordings about annotations are those up to this one (a next session's come after).
+    last_take: u64,
+    /// Clipboard images attached in it, at the seconds since it opened.
+    extras: Vec<CapturedImage>,
+}
+
+impl Take {
+    /// Too short to be meant, with nothing attached.
+    fn accidental(&self) -> bool {
+        let seconds = self.samples.len() as f32 / self.sample_rate.max(1) as f32;
+        seconds < MIN_RECORDING_SECS && self.images.is_empty() && self.texts.is_empty()
+    }
 }
 
 struct LatestNote {
@@ -152,6 +198,16 @@ struct App {
     error: Option<(Instant, String)>,
     mic: Mic,
     keys_down: HashSet<u32>,
+    /// The Asides shortcut held down: its hot key, since when, and whether that press opened
+    /// Asides; and whether holding it started talking.
+    held: Option<(u32, Instant, bool)>,
+    held_talking: bool,
+    /// Where the user put the toolbar, and folded (published in the state for next time).
+    toolbar_at: Option<(f64, f64)>,
+    toolbar_collapsed: bool,
+    /// Clipboard images attached while Asides was open but nothing was being said, at the seconds
+    /// since it opened.
+    session_images: Vec<CapturedImage>,
     last_request: Option<String>,
     /// The last Send to Agent in each directory, newest first, published in `state.json` for the
     /// agents listening.
@@ -179,6 +235,12 @@ struct App {
     capturing: Option<(Instant, Vec<ScreenInfo>, Vec<WindowInfo>)>,
     /// Measure & Annotate's overlay, while it's open.
     overlay: Option<Overlay>,
+    /// What was said in the open Measure & Annotate session, until it ends.
+    takes: Vec<Take>,
+    /// What was said about its annotations: (annotation key, take, transcript once it's back).
+    said: Vec<(u32, u64, Option<String>)>,
+    next_take: u64,
+    finishing: Option<Finishing>,
     /// The last session's guides and held measurements, which the next can restore.
     last_measure: Saved,
     /// The overlay showed its keys once already.
@@ -284,6 +346,11 @@ impl App {
             error: None,
             mic: macos::mic_status(),
             keys_down: HashSet::new(),
+            held: None,
+            held_talking: false,
+            toolbar_at: previous.toolbar_at,
+            toolbar_collapsed: previous.toolbar_collapsed,
+            session_images: Vec::new(),
             last_request: None,
             agent_sends,
             pending_send: false,
@@ -298,6 +365,10 @@ impl App {
             wispr: None,
             capturing: None,
             overlay: None,
+            takes: Vec::new(),
+            said: Vec::new(),
+            next_take: 1,
+            finishing: None,
             last_measure: Saved::default(),
             overlay_tips_seen,
             threads_dir: Arc::new(Mutex::new(None)),
@@ -413,6 +484,8 @@ impl App {
             UserEvent::CommandLinked(CommandLink::Failed(message)) => {
                 self.fail(format!("Could not add the asides command to {}: {message}", install::LINK));
             }
+            // Asides frozen as it opens, or, open, frozen again.
+            UserEvent::Captured(Ok(captures)) if self.overlay.is_some() => self.freeze_overlay(captures),
             UserEvent::Captured(Ok(captures)) => self.show_overlay(captures),
             UserEvent::Captured(Err(message)) => {
                 self.capturing = None;
@@ -452,22 +525,22 @@ impl App {
                 self.send_to_agent();
                 self.publish();
             }
-            Some(Link::Simulate { wav, new_note, image, image_at, request }) => {
+            Some(Link::Simulate { wav, new_note, image, image_at, annotation, request }) => {
                 self.last_request = request;
                 #[cfg(feature = "dev-hooks")]
-                if let Err(err) = self.simulate(&wav, new_note, image, image_at) {
+                if let Err(err) = self.simulate(&wav, new_note, image, image_at, annotation) {
                     self.fail(format!("simulate: {err:#}"));
                 }
                 #[cfg(not(feature = "dev-hooks"))]
                 {
-                    let _ = (wav, new_note, image, image_at);
+                    let _ = (wav, new_note, image, image_at, annotation);
                     self.fail("This build does not support `asides simulate`.".into());
                 }
                 self.publish();
             }
             Some(Link::Measure { request }) => {
                 self.last_request = request;
-                self.measure();
+                self.open_or_finish(false);
                 self.publish();
             }
             Some(Link::SimulateMeasure { image, script, request }) => {
@@ -489,35 +562,64 @@ impl App {
 
     fn on_hotkey(&mut self, event: GlobalHotKeyEvent) {
         let Some(action) = self.hotkeys.as_ref().and_then(|h| h.action(event.id)) else { return };
-        let is_record = matches!(action, Action::Record | Action::RecordNewNote);
+        let asides = matches!(action, Action::Asides | Action::NewNote);
         match event.state {
             HotKeyState::Pressed => {
-                // Ignore key repeat while a record shortcut is held down.
-                if is_record && !self.keys_down.insert(event.id) {
+                // Ignore key repeat while the Asides shortcut is held down.
+                if asides && !self.keys_down.insert(event.id) {
                     return;
                 }
                 match action {
-                    Action::Record | Action::RecordNewNote if self.recording.is_some() => self.stop_recording(),
-                    Action::Record => self.start_recording(false, Some((action, Instant::now()))),
-                    Action::RecordNewNote => self.start_recording(true, Some((action, Instant::now()))),
+                    Action::Asides | Action::NewNote => self.asides_pressed(event.id, action == Action::NewNote),
                     Action::AttachImage => self.attach_image(),
-                    Action::Cancel => self.cancel_recording(),
                     Action::SendToAgent => self.send_to_agent(),
-                    Action::Measure => self.measure(),
+                    Action::Freeze => self.freeze(),
                     Action::NextTarget => self.next_target(),
                 }
             }
             HotKeyState::Released => {
                 self.keys_down.remove(&event.id);
-                let held = self
-                    .recording
-                    .as_ref()
-                    .and_then(|r| r.pressed)
-                    .is_some_and(|(a, at)| a == action && at.elapsed() >= TAP_MAX);
-                if self.config.hold_to_talk && held {
-                    self.stop_recording();
-                }
+                self.asides_released(event.id);
             }
+        }
+    }
+
+    /// The Asides shortcut, pressed: opens Asides (frozen). While it's open (or opening), a tap
+    /// adds it all to the aside, and a hold talks (`held`, see `tick`).
+    fn asides_pressed(&mut self, id: u32, new_note: bool) {
+        let opened = self.overlay.is_none();
+        if opened {
+            self.open_asides(new_note);
+        }
+        if self.overlay.is_some() || self.capturing.is_some() {
+            self.held = Some((id, Instant::now(), opened));
+        }
+    }
+
+    fn asides_released(&mut self, id: u32) {
+        let Some((_, _, opened)) = self.held.take_if(|h| h.0 == id) else { return };
+        if std::mem::take(&mut self.held_talking) {
+            return self.stop_recording();
+        }
+        // The press that opened it only opens it.
+        if !opened && let Some(overlay) = &mut self.overlay {
+            overlay.send(&OverlayCommand::Finish);
+        }
+    }
+
+    /// The Asides shortcut from the menu or `asides annotate`: opens Asides, or, open, adds it all.
+    fn open_or_finish(&mut self, new_note: bool) {
+        match &mut self.overlay {
+            Some(overlay) => overlay.send(&OverlayCommand::Finish),
+            None => self.open_asides(new_note),
+        }
+    }
+
+    /// The freeze shortcut: freezes the screen, or back to live; closed, opens Asides frozen.
+    fn freeze(&mut self) {
+        match &mut self.overlay {
+            Some(overlay) => overlay.send(&OverlayCommand::ToggleFreeze),
+            None => self.open_asides(false),
         }
     }
 
@@ -525,12 +627,15 @@ impl App {
         let Some(action) = self.tray.as_ref().and_then(|t| t.action(&event.id)) else { return };
         let checked = self.tray.as_ref().is_some_and(|t| t.checked(&action));
         match action {
-            MenuAction::Record if self.recording.is_some() => self.stop_recording(),
-            MenuAction::Record => self.start_recording(false, None),
-            MenuAction::RecordNewNote => self.start_recording(true, None),
+            MenuAction::Open => self.open_or_finish(false),
+            MenuAction::OpenInNewNote => self.open_or_finish(true),
             MenuAction::AttachImage => self.attach_image(),
-            MenuAction::Measure => self.measure(),
-            MenuAction::Cancel => self.cancel_recording(),
+            MenuAction::Freeze => self.freeze(),
+            MenuAction::Discard => {
+                if let Some(overlay) = &mut self.overlay {
+                    overlay.send(&OverlayCommand::Close);
+                }
+            }
             MenuAction::SendToAgent => self.send_to_agent(),
             MenuAction::OpenReplies => self.with_latest(macos::open),
             MenuAction::Target(id) => self.set_target(id),
@@ -559,7 +664,7 @@ impl App {
                 if checked && !elements::trusted() {
                     elements::request_trust();
                     let status = "Allow Asides in System Settings → Privacy & Security → Accessibility to name the \
-                                  elements you mark";
+                                  elements you annotate";
                     self.flash = Some((Instant::now() + SENT_FLASH, "Accessibility".into(), status.into()));
                     self.refresh();
                 }
@@ -618,6 +723,21 @@ impl App {
                 self.flash = Some((now + FLASH, "–".into(), "Nothing heard; nothing was written".into()));
             }
             Outcome::Failed(message) => self.fail(message),
+            Outcome::Transcribed { id, text } => {
+                let text = text.unwrap_or_else(|err| {
+                    self.fail(format!("Could not transcribe what you said: {err}"));
+                    String::new()
+                });
+                // Unless it was thrown away meanwhile.
+                if let Some(said) = self.said.iter_mut().find(|s| s.1 == id) {
+                    said.2 = Some(text.clone());
+                    let annotation = said.0;
+                    if let Some(overlay) = self.overlay.as_mut().filter(|o| !o.over) {
+                        overlay.send(&OverlayCommand::Said { annotation, take: id, text });
+                    }
+                }
+                self.try_finish();
+            }
         }
         self.refresh_latest();
         self.flush_send();
@@ -666,7 +786,8 @@ impl App {
         self.refresh();
     }
 
-    fn start_recording(&mut self, force_new: bool, pressed: Option<(Action, Instant)>) {
+    /// Starts recording; `annotation`: what's said is about that annotation (from its card).
+    fn start_recording(&mut self, force_new: bool, pressed: Option<(Action, Instant)>, annotation: Option<u32>) {
         let Some(dir) = self.bound.clone() else {
             return self.fail("Not bound to a directory. Run `asides` in a repo first.".into());
         };
@@ -714,12 +835,10 @@ impl App {
             environment: environment::capture(self.mtm),
             pressed,
             clipboard: clipboard::change_count(),
+            annotation,
         });
-        // While Measure & Annotate is open, Esc belongs to it, and a recording started then (with
-        // its talk key, the microphone, or the shortcut) ends with it.
-        if let Some(hotkeys) = &mut self.hotkeys {
-            hotkeys.set_cancel_active(self.overlay.is_none());
-        }
+        // A recording started in Asides (with its talk key, a microphone, or the shortcut) ends
+        // with it.
         if let Some(overlay) = &mut self.overlay {
             overlay.started_recording = true;
         }
@@ -732,42 +851,83 @@ impl App {
     }
 
     fn stop_recording(&mut self) {
-        let Some(recording) = self.recording.take() else { return };
-        if let Some(hotkeys) = &mut self.hotkeys {
-            hotkeys.set_cancel_active(false);
+        if let Some(take) = self.end_recording() {
+            self.keep_take(take);
         }
-        self.tell_overlay_recording();
-        let (samples, sample_rate) = recording.recorder.finish();
-        self.sound("Pop");
-        self.sync_session_hotkey();
-        let seconds = samples.len() as f32 / sample_rate.max(1) as f32;
-        if seconds < MIN_RECORDING_SECS && recording.images.is_empty() && recording.texts.is_empty() {
+    }
+
+    fn keep_take(&mut self, take: Take) {
+        if take.accidental() {
             self.refresh();
             self.publish();
             return;
         }
-        self.submit(Job::Recording(Box::new(RecordingJob {
-            dir: recording.dir,
-            samples,
-            sample_rate,
+        // Said about an annotation: transcribed now, for its card and the aside.
+        if let Some(annotation) = take.annotation {
+            let id = self.next_take;
+            self.next_take += 1;
+            self.said.push((annotation, id, None));
+            if let Some(overlay) = self.overlay.as_mut().filter(|o| !o.over) {
+                overlay.send(&OverlayCommand::Transcribing { annotation, take: id });
+            }
+            let (model, languages) = (self.config.model.clone(), self.config.languages.clone());
+            let job = TranscribeJob { id, samples: take.samples, sample_rate: take.sample_rate, model, languages };
+            return self.submit(Job::Transcribe(Box::new(job)));
+        }
+        // In Measure & Annotate, what's said waits for Done, to make one aside with what's annotated.
+        if self.overlay.as_ref().is_some_and(|o| !o.over) {
+            self.takes.push(take);
+            self.refresh();
+            self.publish();
+            return;
+        }
+        let job = self.recording_job(take);
+        self.submit(Job::Recording(Box::new(job)));
+    }
+
+    /// Ends the recording under way: what it captured.
+    fn end_recording(&mut self) -> Option<Take> {
+        let recording = self.recording.take()?;
+        self.tell_overlay_recording();
+        let (samples, sample_rate) = recording.recorder.finish();
+        self.sound("Pop");
+        self.sync_session_hotkey();
+        Some(Take {
+            started_at: recording.started_at,
             started: recording.started,
+            dir: recording.dir,
             new_note: recording.new_note,
+            route: recording.route,
             images: recording.images,
             texts: recording.texts,
             environment: recording.environment,
+            samples,
+            sample_rate,
+            carried: self.overlay.as_ref().is_some_and(|o| !o.started_recording),
+            annotation: recording.annotation,
+        })
+    }
+
+    fn recording_job(&self, take: Take) -> RecordingJob {
+        RecordingJob {
+            dir: take.dir,
+            samples: take.samples,
+            sample_rate: take.sample_rate,
+            started: take.started,
+            new_note: take.new_note,
+            images: take.images,
+            texts: take.texts,
+            environment: take.environment,
             keep_audio: self.config.keep_audio,
             model: self.config.model.clone(),
             languages: self.config.languages.clone(),
             auto_new_note: self.config.auto_new_note,
-            route: recording.route,
-        })));
+            route: take.route,
+        }
     }
 
     fn cancel_recording(&mut self) {
         let Some(recording) = self.recording.take() else { return };
-        if let Some(hotkeys) = &mut self.hotkeys {
-            hotkeys.set_cancel_active(false);
-        }
         self.tell_overlay_recording();
         drop(recording.recorder.finish());
         // A cancelled "new note" request stays pending for the next recording.
@@ -785,16 +945,33 @@ impl App {
             return self.fail("The clipboard has no image. Copy a screenshot first (⌃⇧⌘4).".into());
         };
         if let Some(recording) = &mut self.recording {
-            recording.images.push(CapturedImage {
-                offset: recording.started_at.elapsed().as_secs_f32(),
+            // Attached already (when it was copied, with auto-attach): once is enough.
+            if recording.images.iter().all(|i| i.bytes != image.bytes) {
+                recording.images.push(CapturedImage {
+                    offset: recording.started_at.elapsed().as_secs_f32(),
+                    at: Local::now(),
+                    bytes: image.bytes,
+                    extension: image.extension,
+                    details: None,
+                });
+            }
+            recording.clipboard = clipboard::change_count();
+            self.sound("Tink");
+            self.refresh();
+            return;
+        }
+        // In Asides with nothing being said: part of its aside, when it was attached.
+        if let Some(overlay) = &self.overlay {
+            let offset = overlay::seconds_between(overlay.origin(), Instant::now());
+            let image = CapturedImage {
+                offset,
                 at: Local::now(),
                 bytes: image.bytes,
                 extension: image.extension,
                 details: None,
-            });
-            recording.clipboard = clipboard::change_count();
+            };
+            self.session_images.push(image);
             self.sound("Tink");
-            self.refresh();
             return;
         }
         let Some(dir) = self.bound.clone() else {
@@ -843,13 +1020,18 @@ impl App {
         })));
     }
 
-    /// Measure & Annotate: freezes every screen (asking for the Screen Recording permission the
-    /// first time). The overlay opens once the screenshots arrive. Pressed while it's open, the
-    /// shortcut adds what's there to the aside.
-    fn measure(&mut self) {
-        if let Some(overlay) = &mut self.overlay {
-            return overlay.send(&OverlayCommand::Finish);
+    /// Opens Asides with the screen frozen, the likelier start: measuring and annotating what's on
+    /// it (▶ or the freeze shortcut goes live). `new_note`: its aside starts one.
+    fn open_asides(&mut self, new_note: bool) {
+        if new_note && self.pending_new.is_none() {
+            self.pending_new = Some(PendingNew { title: None });
         }
+        self.capture_screens();
+    }
+
+    /// Freezes every screen (asking for the Screen Recording permission the first time): Asides
+    /// opens frozen once the screenshots arrive, or, open, freezes (`freeze_overlay`).
+    fn capture_screens(&mut self) {
         // A capture that never answered doesn't block the next one for long.
         if self.capturing.as_ref().is_some_and(|(at, ..)| at.elapsed() < CAPTURE_TIMEOUT) {
             return;
@@ -857,7 +1039,7 @@ impl App {
         if !capture::permitted() {
             capture::request();
             return self.fail(
-                "Measure & Annotate needs to see the screen: allow Asides in System Settings → Privacy & Security → \
+                "Asides needs to see the screen to freeze it: allow it in System Settings → Privacy & Security → \
                  Screen & System Audio Recording, then quit and reopen Asides."
                     .into(),
             );
@@ -870,37 +1052,38 @@ impl App {
                 (s.display, px(s.frame.size.width), px(s.frame.size.height))
             })
             .collect();
-        // The windows as they are now, before the overlay covers them.
-        self.capturing = Some((Instant::now(), screens, elements::windows()));
+        // The windows as they are now, before the overlay covers them (and without its toolbar), and
+        // the app the user is in, to give the keyboard back to when the screen goes live again.
+        let overlay = self.overlay.as_mut();
+        let without = overlay.as_ref().map(|o| o.pid());
+        if let Some(overlay) = overlay {
+            overlay.previous_app = macos::frontmost_app();
+        }
+        self.capturing = Some((Instant::now(), screens, elements::windows(without)));
         let proxy = Mutex::new(self.proxy.clone());
-        capture::capture(displays, move |result| {
+        capture::capture(displays, without, move |result| {
             let _ = proxy.lock().unwrap().send_event(UserEvent::Captured(result));
         });
     }
 
+    /// Asides, open over the live screen, frozen: the screenshots go to its overlay.
+    fn freeze_overlay(&mut self, captures: Vec<Capture>) {
+        let Some((_, screens, windows)) = self.capturing.take() else { return };
+        let (spec_screens, frames) = spec_screens(screens, captures);
+        let Some(overlay) = &mut self.overlay else { return };
+        overlay.windows = windows;
+        if spec_screens.is_empty() {
+            return self.fail("Could not capture the screen.".into());
+        }
+        if let Err(err) = overlay.freeze(spec_screens, &frames) {
+            self.fail(format!("Could not freeze the screen: {err:#}"));
+        }
+        self.refresh();
+    }
+
     fn show_overlay(&mut self, captures: Vec<Capture>) {
         let Some((_, screens, windows)) = self.capturing.take() else { return };
-        let mut captures: Vec<Option<Capture>> = captures.into_iter().map(Some).collect();
-        let mut frames = Vec::new();
-        let mut spec_screens = Vec::new();
-        for s in screens {
-            let Some(capture) =
-                captures.iter_mut().find(|c| c.as_ref().is_some_and(|c| c.display == s.display)).and_then(Option::take)
-            else {
-                continue;
-            };
-            let (w, h) = (s.frame.size.width, s.frame.size.height);
-            spec_screens.push(SpecScreen {
-                display: s.display,
-                screen: Screen { name: s.name, width: w, height: h, scale: s.scale },
-                origin: s.origin,
-                frame: PtRect::new(s.frame.origin.x, s.frame.origin.y, w, h),
-                pixels: String::new(),
-                width: capture.frame.width,
-                height: capture.frame.height,
-            });
-            frames.push(capture.frame);
-        }
+        let (spec_screens, frames) = spec_screens(screens, captures);
         if spec_screens.is_empty() {
             return self.fail("Could not capture the screen.".into());
         }
@@ -910,14 +1093,14 @@ impl App {
         let tips = !self.overlay_tips_seen;
         let spec = Spec { screens: spec_screens, tips, ..self.overlay_spec() };
         if let Err(err) = self.open_overlay(spec, &frames, windows) {
-            return self.fail(format!("Could not open Measure & Annotate: {err:#}"));
+            return self.fail(format!("Could not open Asides: {err:#}"));
         }
         if tips {
             self.overlay_tips_seen = true;
             self.publish();
         }
         if self.config.measure.record && self.recording.is_none() {
-            self.start_recording(false, None);
+            self.start_recording(false, None, None);
         }
     }
 
@@ -932,7 +1115,8 @@ impl App {
             padding: m.padding.max(0.0),
             identify: m.identify_elements,
             keys: m.keys.clone(),
-            record_shortcut: asides_core::config::pretty_shortcut(&self.config.shortcuts.record),
+            record_shortcut: asides_core::config::pretty_shortcut(&self.config.shortcuts.asides),
+            freeze_shortcut: asides_core::config::pretty_shortcut(&self.config.shortcuts.freeze),
             recording: self.recording.as_ref().map(|r| r.started_at.elapsed().as_secs_f32()),
             batch: self.config.agent_delivery == AgentDelivery::Batch,
             bound: self
@@ -943,6 +1127,8 @@ impl App {
                 .map(|n| n.to_string_lossy().into_owned()),
             toolbar: m.toolbar,
             saved: self.last_measure.clone(),
+            toolbar_at: self.toolbar_at,
+            toolbar_collapsed: self.toolbar_collapsed,
             ..Spec::default()
         }
     }
@@ -959,19 +1145,18 @@ impl App {
         };
         let mut overlay = overlay::start(spec, frames, windows, notify)?;
         overlay.previous_app = macos::frontmost_app();
+        // Talking from the press that opened it: the session's, like one started in it.
+        overlay.started_recording = self.held_talking && self.recording.is_some();
         self.overlay = Some(overlay);
-        // Esc belongs to the overlay while it's open.
-        if let Some(hotkeys) = &mut self.hotkeys {
-            hotkeys.set_cancel_active(false);
-        }
         Ok(())
     }
 
     /// Tells the overlay whether a recording is under way (its toolbar shows it).
     fn tell_overlay_recording(&mut self) {
         let seconds = self.recording.as_ref().map(|r| r.started_at.elapsed().as_secs_f32());
+        let annotation = self.recording.as_ref().and_then(|r| r.annotation);
         if let Some(overlay) = &mut self.overlay {
-            overlay.send(&OverlayCommand::Recording { seconds });
+            overlay.send(&OverlayCommand::Recording { seconds, annotation });
         }
     }
 
@@ -984,7 +1169,29 @@ impl App {
                 let element = elements::identify(&overlay.windows, x, y, deep);
                 overlay.send(&OverlayCommand::Element { id, element: element.map(Box::new) });
             }
-            OverlayMessage::Event(OverlayEvent::Talk { down }) => self.talk(down),
+            OverlayMessage::Event(OverlayEvent::Talk { down, annotation }) => self.talk(down, annotation),
+            OverlayMessage::Event(OverlayEvent::Stop) => self.stop_recording(),
+            OverlayMessage::Event(OverlayEvent::Unsay { annotation }) => {
+                self.said.retain(|s| s.0 != annotation);
+                // Still being said: it goes too, without a word.
+                if self.recording.as_ref().is_some_and(|r| r.annotation == Some(annotation))
+                    && let Some(recording) = self.recording.take()
+                {
+                    drop(recording.recorder.finish());
+                    self.tell_overlay_recording();
+                    self.refresh();
+                }
+            }
+            OverlayMessage::Event(OverlayEvent::Freeze) => self.capture_screens(),
+            OverlayMessage::Event(OverlayEvent::Live) => {
+                // The overlay gives the keyboard back to the app the user was in.
+                overlay.frozen = false;
+                self.refresh();
+            }
+            OverlayMessage::Event(OverlayEvent::ToolbarPlaced { at, collapsed }) => {
+                (self.toolbar_at, self.toolbar_collapsed) = (at, collapsed);
+                self.publish();
+            }
             OverlayMessage::Event(OverlayEvent::Toolbar { shown }) => self.update_config(|c| c.measure.toolbar = shown),
             OverlayMessage::Event(OverlayEvent::Copied) => {
                 // Not a screenshot to attach: it's already part of the session.
@@ -995,85 +1202,127 @@ impl App {
             OverlayMessage::Event(OverlayEvent::Finished) => {
                 overlay.over = true;
                 let started_recording = overlay.started_recording;
-                let opened_offset = self.recording.as_ref().map(|r| overlay.offset_from(r.started_at));
+                let origin = overlay.origin();
                 match overlay.result() {
                     Ok((outcome, images)) => {
                         self.last_measure = outcome.saved.clone();
-                        let send = outcome.send;
-                        self.add_inspection(outcome, images, opened_offset);
-                        // A recording started in the overlay ends with it.
-                        if started_recording || send {
+                        // A recording about an annotation ends: transcribed for it.
+                        if self.recording.as_ref().is_some_and(|r| r.annotation.is_some()) {
                             self.stop_recording();
                         }
-                        if send {
-                            self.send_to_agent();
-                        }
+                        let opened_offset = self
+                            .recording
+                            .as_ref()
+                            .map(|r| self.overlay.as_ref().map_or(0.0, |o| o.offset_from(r.started_at)));
+                        let narrating = started_recording && self.recording.is_some();
+                        // What was said in it and what was annotated, as one aside: a recording
+                        // started in it ends with it. Nothing said: into the recording that was
+                        // under way when it opened (which goes on), or an entry of its own.
+                        let takes = (!self.takes.is_empty() || narrating).then(|| {
+                            let mut takes = std::mem::take(&mut self.takes);
+                            takes.extend(self.end_recording());
+                            takes
+                        });
+                        let (send, last_take) = (outcome.send, self.next_take - 1);
+                        let extras = std::mem::take(&mut self.session_images);
+                        let finishing =
+                            Finishing { outcome, images, takes, origin, opened_offset, send, last_take, extras };
+                        self.finishing = Some(finishing);
+                        self.try_finish();
                     }
-                    Err(err) => self.fail(format!("Measure & Annotate: {err:#}")),
+                    Err(err) => self.fail(format!("Asides: {err:#}")),
                 }
             }
             OverlayMessage::Event(OverlayEvent::Cancelled { saved }) => {
                 overlay.over = true;
+                let live = overlay.started_recording && self.recording.is_some();
                 if !saved.is_empty() {
                     self.last_measure = saved;
                 }
-                if overlay.started_recording {
+                // Esc adds nothing, what was said in the session included. A recording that was
+                // under way before it opened is kept. (A session before it may still be finishing.)
+                let before = self.finishing.as_ref().map_or(0, |f| f.last_take);
+                self.said.retain(|s| s.1 <= before);
+                let mut discarded = false;
+                for take in std::mem::take(&mut self.takes) {
+                    if take.carried {
+                        let job = self.recording_job(take);
+                        self.submit(Job::Recording(Box::new(job)));
+                    } else {
+                        discarded = true;
+                        if let Some(title) = take.new_note
+                            && self.pending_new.is_none()
+                        {
+                            self.pending_new = Some(PendingNew { title });
+                        }
+                    }
+                }
+                if live {
                     self.cancel_recording();
+                } else if discarded {
+                    self.sound("Funk");
+                    self.flash = Some((Instant::now() + FLASH, "✕".into(), "Recording cancelled".into()));
+                    self.refresh();
                 }
             }
             OverlayMessage::Exited => {
                 let crashed = !overlay.over;
-                let previous = overlay.previous_app;
-                self.overlay = None;
-                if let Some(hotkeys) = &mut self.hotkeys {
-                    hotkeys.set_cancel_active(self.recording.is_some());
+                // Closing, the overlay gives the keyboard back itself (frozen; live, it's the user's,
+                // in whatever app they went on to). Crashed while frozen, it couldn't.
+                let previous = overlay.previous_app.filter(|_| crashed && overlay.frozen);
+                // Ended without Done or Esc: what was said is kept.
+                self.keep_takes();
+                if self.finishing.is_none() {
+                    self.said.clear();
                 }
+                self.overlay = None;
+                self.session_images.clear();
                 if let Some(pid) = previous {
                     macos::activate_app(pid);
                 }
                 if crashed {
-                    self.fail("Measure & Annotate closed unexpectedly.".into());
+                    self.fail("Asides' overlay closed unexpectedly.".into());
                 }
                 self.refresh();
             }
         }
     }
 
-    /// The overlay's talk key or microphone button, like the record shortcut: a tap toggles, a
-    /// longer press records until it's let go.
-    fn talk(&mut self, down: bool) {
+    /// The overlay's talk key or a microphone button: a tap toggles, a longer press records until
+    /// it's let go. From an annotation's card, it records what's said
+    /// about that annotation.
+    fn talk(&mut self, down: bool, annotation: Option<u32>) {
         if down {
             if self.recording.is_some() {
                 return self.stop_recording();
             }
-            return self.start_recording(false, Some((Action::Record, Instant::now())));
+            return self.start_recording(false, Some((Action::Asides, Instant::now())), annotation);
         }
         let held = self
             .recording
             .as_ref()
             .and_then(|r| r.pressed)
-            .is_some_and(|(a, at)| a == Action::Record && at.elapsed() >= TAP_MAX);
+            .is_some_and(|(a, at)| a == Action::Asides && at.elapsed() >= TAP_MAX);
         if self.config.hold_to_talk && held {
             self.stop_recording();
         }
     }
 
-    /// A finished Measure & Annotate session: into the recording in progress, at the moments it
-    /// happened (so marks sit among what was said about them), or as an entry of its own.
-    /// `opened_offset` is when the overlay opened, in seconds into the recording.
-    fn add_inspection(&mut self, outcome: OverlayOutcome, images: Vec<Option<Vec<u8>>>, opened_offset: Option<f32>) {
-        let at = Local::now();
-        let mut pictures = Vec::new();
-        let mut texts = Vec::new();
-        for (item, bytes) in outcome.items.into_iter().zip(images) {
-            let offset = opened_offset.map_or(item.time, |start| (start + item.time).max(0.0));
-            match bytes {
-                Some(bytes) => {
-                    pictures.push(CapturedImage { offset, at, bytes, extension: "png".into(), details: item.text })
-                }
-                None => texts.extend(item.text.map(|text| (offset, text))),
-            }
-        }
+    /// A finished Asides session: into the recording in progress, at the moments it happened (so
+    /// annotations sit among what was said about them), or as an entry of its own. `origin` is when
+    /// the overlay opened, and `opened_offset` that moment in seconds into the recording.
+    fn add_inspection(
+        &mut self,
+        outcome: OverlayOutcome,
+        images: Vec<Option<Vec<u8>>>,
+        extras: Vec<CapturedImage>,
+        origin: Instant,
+        opened_offset: Option<f32>,
+    ) {
+        let at = |time: f32| opened_offset.map_or(time, |start| (start + time).max(0.0));
+        let opened = wall_clock(origin);
+        let (mut pictures, texts) = inspection_parts(outcome, images, opened, at);
+        pictures.extend(extras.into_iter().map(|i| CapturedImage { offset: at(i.offset), ..i }));
         if let Some(recording) = &mut self.recording {
             recording.images.extend(pictures);
             recording.texts.extend(texts);
@@ -1088,7 +1337,7 @@ impl App {
         self.submit(Job::Screen(Box::new(ScreenJob {
             route,
             dir,
-            at,
+            at: opened,
             images: pictures,
             texts,
             new_note,
@@ -1096,6 +1345,110 @@ impl App {
             model: self.config.model.clone(),
             auto_new_note: self.config.auto_new_note,
         })));
+    }
+
+    /// Adds a finished Measure & Annotate session once what was said about its annotations is
+    /// transcribed: into their blocks (what the overlay didn't have yet), then into the aside.
+    fn try_finish(&mut self) {
+        let Some(finishing) = &self.finishing else { return };
+        let keys: Vec<u32> = finishing.outcome.items.iter().filter_map(|i| i.annotation).collect();
+        let last = finishing.last_take;
+        if self.said.iter().any(|&(key, take, ref text)| take <= last && keys.contains(&key) && text.is_none()) {
+            return;
+        }
+        let Some(mut f) = self.finishing.take() else { return };
+        let detail = self.config.annotation_detail;
+        for item in &mut f.outcome.items {
+            let (Some(key), Some(block)) = (item.annotation, item.text.as_mut()) else { continue };
+            let had = std::mem::take(&mut item.said);
+            for (_, _, text) in self.said.iter().filter(|s| s.1 <= last && s.0 == key && !had.contains(&s.1)) {
+                *block = inspect::with_said(block, text.as_deref().unwrap_or_default(), detail);
+            }
+        }
+        self.said.retain(|s| s.1 > last);
+        match f.takes {
+            Some(takes) => self.add_session(takes, f.outcome, f.images, f.extras, f.origin),
+            // Nothing said and nothing done: nothing to add.
+            None if f.outcome.items.is_empty() && f.extras.is_empty() => {}
+            None => {
+                self.add_inspection(f.outcome, f.images, f.extras, f.origin, f.opened_offset);
+                if f.send {
+                    self.stop_recording();
+                }
+            }
+        }
+        if f.send {
+            self.send_to_agent();
+        }
+    }
+
+    /// A Measure & Annotate session that was talked through, as one aside: its takes joined into one
+    /// recording (`asides_core::takes`), with each screenshot and annotation at the moment it was made.
+    /// `origin` is when the overlay opened; the items' times are seconds since.
+    fn add_session(
+        &mut self,
+        takes: Vec<Take>,
+        outcome: OverlayOutcome,
+        images: Vec<Option<Vec<u8>>>,
+        extras: Vec<CapturedImage>,
+        origin: Instant,
+    ) {
+        let mut takes: Vec<Take> = takes.into_iter().filter(|t| !t.accidental()).collect();
+        if takes.is_empty() {
+            if !outcome.items.is_empty() || !extras.is_empty() {
+                self.add_inspection(outcome, images, extras, origin, None);
+            }
+            return;
+        }
+        takes.sort_by_key(|t| t.started_at);
+        let starts: Vec<f32> = takes.iter().map(|t| overlay::seconds_between(origin, t.started_at)).collect();
+        let parts: Vec<takes::Take> = takes
+            .iter()
+            .zip(&starts)
+            .map(|(t, &start)| takes::Take { start, samples: &t.samples, sample_rate: t.sample_rate })
+            .collect();
+        let joined = takes::join(&parts);
+        drop(parts);
+        let opened = wall_clock(origin);
+        let (mut pictures, mut texts) = inspection_parts(outcome, images, opened, |time| joined.offset(time));
+        pictures.extend(extras.into_iter().map(|i| CapturedImage { offset: joined.offset(i.offset), ..i }));
+        let mut takes = takes.into_iter().zip(starts);
+        let Some((first, first_start)) = takes.next() else { return };
+        let mut new_note = first.new_note;
+        let mut add = |images: Vec<CapturedImage>, notes: Vec<(f32, String)>, start: f32| {
+            pictures.extend(images.into_iter().map(|i| CapturedImage { offset: joined.offset(start + i.offset), ..i }));
+            texts.extend(notes.into_iter().map(|(offset, text)| (joined.offset(start + offset), text)));
+        };
+        add(first.images, first.texts, first_start);
+        for (take, start) in takes {
+            new_note = new_note.or(take.new_note);
+            add(take.images, take.texts, start);
+        }
+        self.submit(Job::Recording(Box::new(RecordingJob {
+            dir: first.dir,
+            samples: joined.samples,
+            sample_rate: joined.sample_rate,
+            started: first.started.min(opened),
+            new_note,
+            images: pictures,
+            texts,
+            environment: first.environment,
+            keep_audio: self.config.keep_audio,
+            model: self.config.model.clone(),
+            languages: self.config.languages.clone(),
+            auto_new_note: self.config.auto_new_note,
+            route: first.route,
+        })));
+    }
+
+    /// What was said in a Measure & Annotate session that ends without Done or Esc (it crashed, or
+    /// Asides quits), as a recording.
+    fn keep_takes(&mut self) {
+        let takes = std::mem::take(&mut self.takes);
+        if !takes.is_empty() {
+            let origin = self.overlay.as_ref().map_or_else(Instant::now, |o| o.origin());
+            self.add_session(takes, OverlayOutcome::default(), Vec::new(), Vec::new(), origin);
+        }
     }
 
     /// An agent resolved, dismissed, acknowledged or replied to an aside: say so in the menu bar,
@@ -1429,13 +1782,27 @@ impl App {
     }
 
     fn tick(&mut self) {
+        // The Asides shortcut held down: talking until it's let go.
+        if let Some((_, at, _)) = self.held
+            && !self.held_talking
+            && self.config.hold_to_talk
+            && at.elapsed() >= TAP_MAX
+            && (self.overlay.is_some() || self.capturing.is_some())
+            && self.recording.is_none()
+        {
+            // While the screen is still freezing too: the first words aren't lost.
+            self.held_talking = true;
+            self.start_recording(false, None, None);
+        }
         let auto_attach = self.config.auto_attach_images;
         if let Some(recording) = &mut self.recording {
             let count = clipboard::change_count();
             if auto_attach && count != recording.clipboard {
                 recording.clipboard = count;
+                // Some apps put the same image on the clipboard twice: once is enough.
                 if clipboard::has_image()
                     && let Some(image) = clipboard::read_image()
+                    && recording.images.iter().all(|i| i.bytes != image.bytes)
                 {
                     recording.images.push(CapturedImage {
                         offset: recording.started_at.elapsed().as_secs_f32(),
@@ -1457,6 +1824,9 @@ impl App {
     fn next_wakeup(&self) -> Option<Instant> {
         let now = Instant::now();
         let error_icon = self.error.as_ref().is_some_and(|(at, _)| now < *at + ERROR_ICON);
+        if let Some((_, at, _)) = self.held.filter(|_| !self.held_talking) {
+            return Some((at + TAP_MAX).max(now));
+        }
         (self.recording.is_some() || self.flash.is_some() || error_icon).then_some(now + TICK)
     }
 
@@ -1544,7 +1914,8 @@ impl App {
             icon,
             title,
             status,
-            recording: self.recording.is_some(),
+            open: self.overlay.is_some(),
+            frozen: self.overlay.as_ref().is_some_and(|o| o.frozen),
             bound: self.bound.as_deref(),
             note_info,
             has_note: self.latest.is_some(),
@@ -1635,6 +2006,8 @@ impl App {
             target_session: self.target_session().map(|s| s.id.clone()),
             command_link_declined: self.command_link_declined,
             overlay_tips_seen: self.overlay_tips_seen,
+            toolbar_at: self.toolbar_at,
+            toolbar_collapsed: self.toolbar_collapsed,
             updated_ms: now_ms(),
         };
         if let Err(err) = state.write(&paths::state_path()) {
@@ -1670,6 +2043,7 @@ impl App {
         if self.recording.is_some() {
             self.stop_recording();
         }
+        self.keep_takes();
         if self.in_flight == 0 {
             self.quit = true;
             self.publish();
@@ -1726,9 +2100,6 @@ impl App {
         let Some(hotkeys) = &mut self.hotkeys else { return };
         self.next_target_on = !self.sessions.is_empty();
         hotkeys.apply(&self.config.shortcuts, self.config.agent_delivery == AgentDelivery::Batch, self.next_target_on);
-        if self.recording.is_some() && self.overlay.is_none() {
-            hotkeys.set_cancel_active(true);
-        }
         if let Some(err) = hotkeys.errors.first() {
             self.error = Some((Instant::now(), err.clone()));
         }
@@ -1760,6 +2131,7 @@ impl App {
         new_note: bool,
         image: Option<PathBuf>,
         image_at: f32,
+        annotation: Option<u32>,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
         let dir = self.bound.clone().context("not bound")?;
@@ -1787,21 +2159,22 @@ impl App {
         let pending = self.pending_new.take();
         let new_note = (new_note || pending.is_some()).then(|| pending.and_then(|p| p.title));
         let route = self.route(&dir);
-        self.submit(Job::Recording(Box::new(RecordingJob {
-            route,
-            dir,
-            samples,
-            sample_rate: spec.sample_rate,
+        let take = Take {
+            started_at: Instant::now(),
             started: Local::now(),
+            dir,
             new_note,
+            route,
             images,
             texts: Vec::new(),
             environment: environment::capture(self.mtm),
-            keep_audio: self.config.keep_audio,
-            model: self.config.model.clone(),
-            languages: self.config.languages.clone(),
-            auto_new_note: self.config.auto_new_note,
-        })));
+            samples,
+            sample_rate: spec.sample_rate,
+            carried: false,
+            annotation,
+        };
+        // As if just recorded: while Measure & Annotate is open, part of its aside.
+        self.keep_take(take);
         Ok(())
     }
 
@@ -1827,6 +2200,63 @@ impl App {
         let spec = Spec { screens: vec![screen], script: Some(script), ..self.overlay_spec() };
         self.open_overlay(spec, &[frame], Vec::new())
     }
+}
+
+/// The captured screens, as the overlay gets them, and their pixels.
+fn spec_screens(
+    screens: Vec<ScreenInfo>,
+    captures: Vec<Capture>,
+) -> (Vec<SpecScreen>, Vec<asides_core::measure::Frame>) {
+    let mut captures: Vec<Option<Capture>> = captures.into_iter().map(Some).collect();
+    let mut frames = Vec::new();
+    let mut spec_screens = Vec::new();
+    for s in screens {
+        let Some(capture) =
+            captures.iter_mut().find(|c| c.as_ref().is_some_and(|c| c.display == s.display)).and_then(Option::take)
+        else {
+            continue;
+        };
+        let (w, h) = (s.frame.size.width, s.frame.size.height);
+        spec_screens.push(SpecScreen {
+            display: s.display,
+            screen: Screen { name: s.name, width: w, height: h, scale: s.scale },
+            origin: s.origin,
+            frame: PtRect::new(s.frame.origin.x, s.frame.origin.y, w, h),
+            pixels: String::new(),
+            width: capture.frame.width,
+            height: capture.frame.height,
+        });
+        frames.push(capture.frame);
+    }
+    (spec_screens, frames)
+}
+
+/// A Measure & Annotate session's images and Markdown, at `offset(seconds into the session)`.
+fn inspection_parts(
+    outcome: OverlayOutcome,
+    images: Vec<Option<Vec<u8>>>,
+    opened: DateTime<Local>,
+    offset: impl Fn(f32) -> f32,
+) -> (Vec<CapturedImage>, Vec<(f32, String)>) {
+    let mut pictures = Vec::new();
+    let mut texts = Vec::new();
+    for (item, bytes) in outcome.items.into_iter().zip(images) {
+        let offset = offset(item.time);
+        // Named after when it was taken (each freeze, each screenshot), not when the aside was added.
+        let at = opened + chrono::TimeDelta::milliseconds((item.time.max(0.0) * 1000.0) as i64);
+        match bytes {
+            Some(bytes) => {
+                pictures.push(CapturedImage { offset, at, bytes, extension: "png".into(), details: item.text })
+            }
+            None => texts.extend(item.text.map(|text| (offset, text))),
+        }
+    }
+    (pictures, texts)
+}
+
+/// The time of day at `instant`.
+fn wall_clock(instant: Instant) -> DateTime<Local> {
+    Local::now() - chrono::TimeDelta::from_std(instant.elapsed()).unwrap_or_default()
 }
 
 fn now_ms() -> u64 {

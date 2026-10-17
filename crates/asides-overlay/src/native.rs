@@ -4,10 +4,13 @@
 use asides_core::inspect::PtRect;
 use gpui::Window;
 use objc2::MainThreadMarker;
+use objc2::msg_send;
 use objc2::rc::Retained;
+use objc2::runtime::{AnyClass, AnyObject};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreenSaverWindowLevel, NSView, NSWindow,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy, NSApplicationPresentationOptions,
+    NSEvent, NSEventType, NSPanel, NSRunningApplication, NSScreen, NSScreenSaverWindowLevel, NSView, NSWindow,
+    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -36,6 +39,10 @@ pub fn make_overlay(window: &Window, frame: PtRect) -> (isize, usize) {
     // would never reach GPUI. Give it back to GPUI's view below.
     ns.setStyleMask(NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel);
     ns.setLevel(NSScreenSaverWindowLevel);
+    // GPUI's pop-ups fade in and out, showing what they last showed while they do.
+    ns.setAnimationBehavior(NSWindowAnimationBehavior::None);
+    // Live again, they stay up until the user's app is back (`windows::handed_back`).
+    ns.setHidesOnDeactivate(false);
     ns.setHasShadow(false);
     ns.setMovable(false);
     ns.setCollectionBehavior(
@@ -50,6 +57,191 @@ pub fn make_overlay(window: &Window, frame: PtRect) -> (isize, usize) {
         ns.makeFirstResponder(Some(gpui_view));
     }
     (ns.windowNumber(), view)
+}
+
+/// Makes `window` the toolbar over the live screen at `frame` (AppKit's coordinates): a panel
+/// above other apps' windows, on every space, that never takes the keyboard from the app the user
+/// is working in. Returns its window number and view (for development replays).
+pub fn make_toolbar(window: &Window, frame: PtRect) -> (isize, usize) {
+    let view = view_pointer(window);
+    let Some(ns) = native_window(window) else { return (0, view) };
+    ns.setStyleMask(NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel);
+    ns.setAnimationBehavior(NSWindowAnimationBehavior::None);
+    ns.setHasShadow(false);
+    ns.setMovable(false);
+    ns.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::Stationary
+            | NSWindowCollectionBehavior::IgnoresCycle,
+    );
+    // The overlay's app is never the active one while the screen is live: a panel would hide.
+    ns.setHidesOnDeactivate(false);
+    // Clicks on it don't make it the key window: keys stay with the app underneath.
+    if let Some(panel) = ns.downcast_ref::<NSPanel>() {
+        panel.setBecomesKeyOnlyIfNeeded(true);
+    }
+    ns.setFrame_display(NSRect::new(NSPoint::new(frame.x, frame.y), NSSize::new(frame.width, frame.height)), true);
+    (ns.windowNumber(), view)
+}
+
+// The windows, by their views (`make_overlay`, `make_toolbar`), changed outside GPUI's updates:
+// AppKit tells GPUI about each change (a new size, the keyboard) as it happens, which GPUI can't
+// take while it's updating, and drops.
+
+/// GPUI's view (from `make_overlay` or `make_toolbar`); it lives as long as its window.
+fn view<'a>(pointer: usize) -> Option<&'a NSView> {
+    (pointer != 0).then(|| unsafe { &*(pointer as *const NSView) })
+}
+
+/// Draws these windows now, as GPUI would their next frames, and puts it on screen: hidden ones
+/// show it when they're shown, not what they showed last. (Hidden, GPUI doesn't draw them.)
+pub fn draw_now(views: &[usize]) {
+    for v in views.iter().filter_map(|&v| view(v)) {
+        // GPUI draws on `displayLayer:`, for whatever needs drawing.
+        let _: () = unsafe { msg_send![v, displayLayer: std::ptr::null::<AnyObject>()] };
+    }
+    if let Some(transaction) = AnyClass::get(c"CATransaction") {
+        let _: () = unsafe { msg_send![transaction, flush] };
+    }
+}
+
+/// Shows the window; with `key`, it takes the keyboard too.
+pub fn show(pointer: usize, key: bool) {
+    let Some(window) = view(pointer).and_then(|v| v.window()) else { return };
+    match key {
+        true => window.makeKeyAndOrderFront(None),
+        false => window.orderFrontRegardless(),
+    }
+}
+
+/// The window is on screen, drawn (not just ordered in).
+pub fn on_screen(pointer: usize) -> bool {
+    view(pointer)
+        .and_then(|v| v.window())
+        .is_some_and(|w| w.occlusionState().contains(objc2_app_kit::NSWindowOcclusionState::Visible))
+}
+
+pub fn hide(pointer: usize) {
+    if let Some(window) = view(pointer).and_then(|v| v.window()) {
+        window.orderOut(None);
+    }
+}
+
+/// The window's frame, in AppKit's coordinates.
+pub fn frame(pointer: usize) -> Option<PtRect> {
+    let f = view(pointer)?.window()?.frame();
+    Some(PtRect::new(f.origin.x, f.origin.y, f.size.width, f.size.height))
+}
+
+pub fn set_frame(pointer: usize, frame: PtRect) {
+    if let Some(window) = view(pointer).and_then(|v| v.window()) {
+        let rect = NSRect::new(NSPoint::new(frame.x, frame.y), NSSize::new(frame.width, frame.height));
+        window.setFrame_display(rect, true);
+    }
+}
+
+/// Tells the window where the pointer is now (it moved while the window was hidden): GPUI drops
+/// what was under the pointer when it was last shown, and Measure follows it from there.
+pub fn pointer_moved(pointer: usize) {
+    let Some(v) = view(pointer) else { return };
+    let Some(window) = v.window() else { return };
+    let at = window.mouseLocationOutsideOfEventStream();
+    let Some(event) = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::MouseMoved,
+        at,
+        NSEvent::modifierFlags_class(),
+        0.0,
+        window.windowNumber(),
+        None,
+        0,
+        0,
+        0.0,
+    ) else {
+        return;
+    };
+    let _: () = unsafe { msg_send![v, mouseMoved: &*event] };
+}
+
+/// While the screens are frozen, what macOS lets an app hold back stays back, so nothing slides in
+/// over the frozen screen or takes the user away: the Dock and the menu bar stay hidden; app
+/// switching is off, and with it Mission Control, App Exposé, Show Desktop and switching spaces, by
+/// keys, gestures or hot corners; the overlay can't be hidden, and the Apple menu is off. Force
+/// Quit stays, a way out. They hold only while the overlay's app is active, and app switching only
+/// for a regular app (an accessory one, without a Dock icon, still switches with ⌘Tab): it's one
+/// while frozen, with the Dock hidden. Live, an accessory again, and the user's own settings.
+pub fn kiosk(on: bool) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    if on {
+        app.setPresentationOptions(
+            NSApplicationPresentationOptions::HideDock
+                | NSApplicationPresentationOptions::HideMenuBar
+                | NSApplicationPresentationOptions::DisableProcessSwitching
+                | NSApplicationPresentationOptions::DisableHideApplication
+                | NSApplicationPresentationOptions::DisableAppleMenu,
+        );
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        activate();
+    } else {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        app.setPresentationOptions(NSApplicationPresentationOptions::Default);
+    }
+}
+
+/// Makes the overlay's app the active one (the keyboard, and the kiosk options with it). Asked
+/// politely (`activate`, macOS 14's way), macOS declines while the user's app is in front.
+#[allow(deprecated)]
+pub fn activate() {
+    if let Some(mtm) = MainThreadMarker::new() {
+        NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    }
+}
+
+pub fn is_active() -> bool {
+    MainThreadMarker::new().is_some_and(|mtm| NSApplication::sharedApplication(mtm).isActive())
+}
+
+/// The app in front (its process id), unless it's the overlay's.
+pub fn front_app() -> Option<i32> {
+    let pid = NSWorkspace::sharedWorkspace().frontmostApplication()?.processIdentifier();
+    (pid != std::process::id() as i32).then_some(pid)
+}
+
+/// Gives the keyboard back to the app with this process id, if the overlay has it: over the live
+/// screen (or closed) it's the user's, who may have moved on to another app meanwhile.
+pub fn give_focus(pid: Option<i32>) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let ns = NSApplication::sharedApplication(mtm);
+    if !ns.isActive() {
+        return;
+    }
+    match pid.and_then(NSRunningApplication::runningApplicationWithProcessIdentifier) {
+        // macOS activates another app at the active one's request.
+        Some(app) => {
+            ns.yieldActivationToApplication(&app);
+            app.activateWithOptions(NSApplicationActivationOptions::empty());
+        }
+        // It quit meanwhile: macOS picks the next.
+        None => ns.deactivate(),
+    }
+}
+
+/// The part of the screen at `frame` (AppKit's coordinates) that the Dock and the menu bar leave.
+pub fn visible_frame(frame: PtRect) -> PtRect {
+    let Some(mtm) = MainThreadMarker::new() else { return frame };
+    NSScreen::screens(mtm)
+        .iter()
+        .find(|s| (s.frame().origin.x - frame.x).abs() < 1.0 && (s.frame().origin.y - frame.y).abs() < 1.0)
+        .map_or(frame, |s| {
+            let v = s.visibleFrame();
+            PtRect::new(v.origin.x, v.origin.y, v.size.width, v.size.height)
+        })
+}
+
+/// The left mouse button is down (anywhere).
+pub fn mouse_pressed() -> bool {
+    NSEvent::pressedMouseButtons() & 1 != 0
 }
 
 fn view_pointer(window: &Window) -> usize {
@@ -115,10 +307,12 @@ pub fn debug_focus() {
         .frontmostApplication()
         .map(|a| a.localizedName().map(|n| n.to_string()).unwrap_or_default());
     let now = format!(
-        "active={} key={:?} front={front:?} me={}",
+        "active={} key={:?} front={front:?} me={} options={:?} system={:?}",
         app.isActive(),
         app.keyWindow().map(|w| w.windowNumber()),
-        std::process::id()
+        std::process::id(),
+        app.presentationOptions(),
+        app.currentSystemPresentationOptions(),
     );
     let mut last = LAST.lock().unwrap();
     if *last != now {
