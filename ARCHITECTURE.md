@@ -461,7 +461,9 @@ Break these only on purpose, and update this document when you do.
   and nothing moves while you measure. The cost is the Screen Recording permission.
 - **ScreenCaptureKit, in sRGB.** `CGDisplayCreateImage` and `CGWindowListCreateImage` are
   obsoleted in macOS 15. Capturing in sRGB means the colors Asides reports are close to the CSS
-  colors that produced them, not the display profile's.
+  colors that produced them, not the display profile's. On macOS 26 the screenshots come from its
+  newer API, which keeps windows' shadows (the frozen screen looks exactly like the live one), and
+  are converted to sRGB.
 - **Edges by tolerance from the starting pixel.** Comparing each pixel with the run's first one
   (not its neighbour) stops at soft gradients' ends instead of drifting through them. The default
   (2%) is low enough to see a light gray card on white, and `T` switches to 30% for shadows.

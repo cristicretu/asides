@@ -1,5 +1,5 @@
-//! Freezing the screen for Measure & Annotate: one screenshot per display, taken with
-//! ScreenCaptureKit in sRGB (so colors read like CSS colors). Needs the Screen Recording permission.
+//! Freezing the screen for Asides: one screenshot per display, taken with ScreenCaptureKit, in sRGB
+//! (so colors read like CSS colors). Needs the Screen Recording permission.
 
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 use asides_core::measure::Frame;
 use block2::RcBlock;
 use objc2::AnyThread;
+use objc2::runtime::AnyClass;
+use objc2_app_kit::{NSBitmapImageRep, NSColorRenderingIntent, NSColorSpace};
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{
     CGDataProvider, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
@@ -14,7 +16,8 @@ use objc2_core_graphics::{
 };
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration, SCWindow,
+    SCContentFilter, SCScreenshotConfiguration, SCScreenshotDynamicRange, SCScreenshotManager, SCScreenshotOutput,
+    SCShareableContent, SCStreamConfiguration, SCWindow,
 };
 
 /// A display as AppKit and CoreGraphics know it.
@@ -108,25 +111,15 @@ pub fn capture(
             let filter = unsafe {
                 SCContentFilter::initWithDisplay_excludingWindows(SCContentFilter::alloc(), &display, &left_out)
             };
-            let config = unsafe { SCStreamConfiguration::new() };
-            unsafe {
-                config.setWidth(width);
-                config.setHeight(height);
-                config.setShowsCursor(false);
-                config.setColorSpaceName(kCGColorSpaceSRGB);
-            }
             let (results, done) = (results.clone(), done.clone());
-            let handler = RcBlock::new(move |image: *mut CGImage, error: *mut NSError| {
+            let captured = Arc::new(move |image: Option<CFRetained<CGImage>>, error: *mut NSError| {
                 let mut state = results.lock().unwrap();
                 state.0 -= 1;
-                match NonNull::new(image) {
-                    Some(image) => {
-                        let image = unsafe { CFRetained::retain(image) };
-                        match to_frame(&image) {
-                            Some(frame) => state.1.push(Capture { display: id, frame }),
-                            None => state.2 = Some("The screenshot had an unexpected pixel format.".into()),
-                        }
-                    }
+                match image {
+                    Some(image) => match to_frame(&image) {
+                        Some(frame) => state.1.push(Capture { display: id, frame }),
+                        None => state.2 = Some("The screenshot had an unexpected pixel format.".into()),
+                    },
                     None => state.2 = Some(describe(error, "Could not capture the screen")),
                 }
                 if state.0 == 0 {
@@ -134,6 +127,41 @@ pub fn capture(
                     drop(state);
                     done(if captures.is_empty() { Err(error.unwrap_or_default()) } else { Ok(captures) });
                 }
+            });
+            // macOS 26's screenshots have windows' shadows, as the screen shows them; the older
+            // ones leave them out, so a frozen screen was lighter under every window than the
+            // live one. Its images are in the display's color space: in sRGB, colors read like CSS.
+            if AnyClass::get(c"SCScreenshotConfiguration").is_some() {
+                let config = unsafe { SCScreenshotConfiguration::new() };
+                unsafe {
+                    config.setWidth(width as isize);
+                    config.setHeight(height as isize);
+                    config.setShowsCursor(false);
+                    config.setIgnoreShadows(false);
+                    config.setDynamicRange(SCScreenshotDynamicRange::SDR);
+                }
+                let handler = RcBlock::new(move |output: *mut SCScreenshotOutput, error: *mut NSError| {
+                    let image = unsafe { output.as_ref() }.and_then(|o| unsafe { o.sdrImage() }).and_then(|i| srgb(&i));
+                    captured(image, error);
+                });
+                unsafe {
+                    SCScreenshotManager::captureScreenshotWithFilter_configuration_completionHandler(
+                        &filter,
+                        &config,
+                        Some(&handler),
+                    )
+                };
+                continue;
+            }
+            let config = unsafe { SCStreamConfiguration::new() };
+            unsafe {
+                config.setWidth(width);
+                config.setHeight(height);
+                config.setShowsCursor(false);
+                config.setColorSpaceName(kCGColorSpaceSRGB);
+            }
+            let handler = RcBlock::new(move |image: *mut CGImage, error: *mut NSError| {
+                captured(NonNull::new(image).map(|image| unsafe { CFRetained::retain(image) }), error);
             });
             unsafe {
                 SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
@@ -145,6 +173,16 @@ pub fn capture(
         }
     });
     unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
+}
+
+/// `image` in sRGB.
+fn srgb(image: &CGImage) -> Option<CFRetained<CGImage>> {
+    let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), image);
+    let converted = rep.bitmapImageRepByConvertingToColorSpace_renderingIntent(
+        &NSColorSpace::sRGBColorSpace(),
+        NSColorRenderingIntent::Default,
+    )?;
+    converted.CGImage().map(Into::into)
 }
 
 fn describe(error: *mut NSError, what: &str) -> String {

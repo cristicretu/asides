@@ -294,6 +294,9 @@ pub struct Overlay {
     pub handoff: Option<crate::windows::Handoff>,
     /// Done or closed while frozen: the overlay quits once it has handed the system back.
     pub closing: bool,
+    /// The live toolbar's window (AppKit's coordinates) while the frozen screens give way: they draw
+    /// the toolbar there too, so it shows in the same frame as they lose theirs (`windows::show_live`).
+    pub live_toolbar_frame: Option<PtRect>,
     /// The frozen screens just showed: the system is the overlay's once they're on screen (taken
     /// at once, the menu bar hid a frame before they covered it), and since when.
     pub taking_over: Option<Instant>,
@@ -367,6 +370,7 @@ impl Overlay {
             visible,
             handoff: None,
             closing: false,
+            live_toolbar_frame: None,
             taking_over: None,
             spec,
         }
@@ -1047,12 +1051,13 @@ impl Overlay {
         self.quit(cx);
     }
 
-    /// Closes the overlay; frozen, once the system is back with the app the user was in
-    /// (`windows::sync`), so that app shows as it was, not as an app in the background.
+    /// Closes the overlay; with the frozen screens up (still giving way too), once the system is
+    /// back with the app the user was in (`windows::sync`), so it shows as it was, not as an app in
+    /// the background.
     fn quit(&mut self, cx: &mut Context<Self>) {
-        match self.live {
-            true => cx.quit(),
-            false => self.closing = true,
+        match self.shown == Some(false) {
+            true => self.closing = true,
+            false => cx.quit(),
         }
     }
 
@@ -1394,6 +1399,46 @@ impl Render for ScreenView {
         let (ox, oy) = win.offset;
         let (ww, wh) = win.size;
         let (sw, sh) = (state.screen.width, state.screen.height);
+        let screenshot = || {
+            img(ImageSource::Render(o.images[screen].clone()))
+                .absolute()
+                .left(px(-ox as f32))
+                .top(px(-oy as f32))
+                .w(px(sw as f32))
+                .h(px(sh as f32))
+        };
+        // Giving way (back to the live screen, or closing): the screen as it was, nothing on it, until
+        // the user's app is back (`windows::handed_back`). It looks live at once.
+        if o.handoff.as_ref().is_some_and(|h| h.swapped()) || o.closing {
+            // The live toolbar, as its window draws it, where it is (on this screen).
+            let f = o.spec.screens[screen].frame;
+            let here = o.live_toolbar_frame.filter(|_| !o.closing).filter(|t| {
+                let (cx, cy) = (t.x + t.width / 2.0, t.y + t.height / 2.0);
+                cx >= f.x && cx < f.x + f.width && cy >= f.y && cy < f.y + f.height
+            });
+            let live_toolbar = here.map(|t| {
+                div()
+                    .absolute()
+                    .left(px((t.x - f.x - ox) as f32))
+                    .top(px((f.y + f.height - t.y - t.height - oy) as f32))
+                    .w(px(t.width as f32))
+                    .h(px(t.height as f32))
+                    .overflow_hidden()
+                    .flex()
+                    .items_start()
+                    .p(px(TOOLBAR_MARGIN as f32))
+                    .child(toolbar(&overlay, o, true))
+            });
+            return div()
+                .id("screen")
+                .size_full()
+                .relative()
+                .overflow_hidden()
+                .bg(gpui::black())
+                .child(screenshot())
+                .children(live_toolbar)
+                .into_any_element();
+        }
         let (scale, units) = (state.screen.scale, o.session.units);
         let n = |v: f64| num(v, scale, units);
         let accent = o.accent;
@@ -1708,7 +1753,7 @@ impl Render for ScreenView {
                     .child("Not bound to a repo · run `asides` in your project to keep what you annotate"),
             )
         });
-        let image = o.images[screen].clone();
+        let image = screenshot();
 
         let view = cx.entity();
         div()
@@ -1730,14 +1775,7 @@ impl Render for ScreenView {
                     cx.notify();
                 });
             }))
-            .child(
-                img(ImageSource::Render(image))
-                    .absolute()
-                    .left(px(-ox as f32))
-                    .top(px(-oy as f32))
-                    .w(px(sw as f32))
-                    .h(px(sh as f32)),
-            )
+            .child(image)
             .child(
                 canvas(
                     move |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
@@ -1760,6 +1798,7 @@ impl Render for ScreenView {
             // On top of everything else.
             .children(card.map(|c| deferred(c).with_priority(1)))
             .children(menu.map(|m| deferred(m).with_priority(2)))
+            .into_any_element()
     }
 }
 

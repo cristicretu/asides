@@ -22,6 +22,38 @@ pub fn accessory() {
     }
 }
 
+/// GPUI makes its app a regular one as it finishes launching, and `accessory` turns it back. Made
+/// regular again right after (frozen, `kiosk`), the app got a second Dock tile, which the Dock kept
+/// over the live screen. This keeps the app an accessory through that first call; call it before
+/// GPUI starts. (`setActivationPolicy:` is NSApplication's, which GPUI's application class keeps.)
+pub fn stay_accessory_at_launch() {
+    use objc2::runtime::{Bool, Imp, Sel};
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    type SetPolicy = unsafe extern "C-unwind" fn(&AnyObject, Sel, isize) -> Bool;
+    static ORIGINAL: OnceLock<SetPolicy> = OnceLock::new();
+    static LAUNCHED: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "C-unwind" fn set_policy(app: &AnyObject, cmd: Sel, policy: isize) -> Bool {
+        let policy = match LAUNCHED.swap(true, Ordering::Relaxed) {
+            // GPUI's, at launch: an accessory still.
+            false => NSApplicationActivationPolicy::Accessory.0,
+            true => policy,
+        };
+        match ORIGINAL.get() {
+            Some(original) => unsafe { original(app, cmd, policy) },
+            None => Bool::NO,
+        }
+    }
+
+    let Some(class) = AnyClass::get(c"NSApplication") else { return };
+    let Some(method) = class.instance_method(objc2::sel!(setActivationPolicy:)) else { return };
+    let ours: Imp = unsafe { std::mem::transmute::<SetPolicy, Imp>(set_policy) };
+    let original = unsafe { method.set_implementation(ours) };
+    let _ = ORIGINAL.set(unsafe { std::mem::transmute::<Imp, SetPolicy>(original) });
+}
+
 fn native_window(window: &Window) -> Option<Retained<NSWindow>> {
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::AppKit(h) = handle.as_raw() else { return None };
@@ -266,7 +298,9 @@ pub fn debug(message: &str) {
     });
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("asides-overlay-debug.log"))
     {
-        let _ = writeln!(f, "{message} [{}]", state.unwrap_or_default());
+        let ms =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() % 100_000);
+        let _ = writeln!(f, "{ms} {message} [{}]", state.unwrap_or_default());
     }
 }
 

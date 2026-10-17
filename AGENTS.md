@@ -220,9 +220,22 @@ The user may record a request and ask you to "implement the note". Find it with
 - Handing the keyboard back is asynchronous: hidden at once, the frozen screens showed the user's
   app drawn as one in the background (gray window buttons) for a frame. They stay up until it's in
   front with the Dock and the menu bar back, and drew itself (`windows::handed_back`); closing frozen
-  waits the same way. Taking the system the moment they're ordered in, the menu bar hid a frame
-  before they covered it: the kiosk options wait until they're on screen (`windows::take_over`).
-  `screencapture -v` and per-frame diffs (ffmpeg, PIL) show such one-frame flashes.
+  waits the same way. With the Dock always shown that's about half a second (it slides back in, then
+  drops the overlay's icon, only once it's visible), so on ▶ the frozen screens show just the
+  screenshot with the live toolbar drawn where its window is, at once, in one redraw (ordering a
+  window in and drawing another didn't reach the screen in the same frame). Drawn after the overlay
+  went to the background, a frozen screen's redraw never showed: it redraws while still active.
+  Taking the system the moment they're ordered in, the menu bar hid a frame before they covered
+  it: the kiosk options wait until they're on screen (`windows::take_over`). `screencapture -v`
+  and per-frame diffs (ffmpeg, PIL) show such one-frame flashes.
+- GPUI makes its app regular as it finishes launching; turned back to an accessory and made
+  regular again for the kiosk moments later, the overlay got a second Dock tile that the Dock kept
+  over the live screen, until it quit (accessibility lists the Dock's items). The overlay keeps
+  that launch-time call from taking effect (`native::stay_accessory_at_launch`).
+- ScreenCaptureKit's older screenshots (`captureImageWithFilter`) leave windows' shadows out,
+  `ignoreShadowsDisplay` or not: a frozen screen was lighter under every window than the live one.
+  macOS 26's (`captureScreenshotWithFilter`, `SCScreenshotConfiguration`) has them, in the
+  display's color space; `capture::srgb` converts it.
 - GPUI's pop-ups fade in and out (`NSWindowAnimationBehaviorUtilityWindow`), showing what they
   showed last while they fade: the overlay turns that off. A hidden GPUI window isn't drawn (its
   display link stops), so it shows its last frame when it's shown again (the last freeze, the

@@ -24,10 +24,11 @@ pub const TOOLBAR_LIFT: f64 = 18.0;
 /// Back in front, an app redraws as the active one (macOS draws one in the background
 /// differently): the frozen screens stay up this much longer...
 const HANDOFF_SETTLE: Duration = Duration::from_millis(50);
-/// ...or, with the Dock showing, this much, for it to slide back in.
-const HANDOFF_SETTLE_DOCK: Duration = Duration::from_millis(250);
+/// ...or, with the Dock showing, this much: it slides back in and only then drops the overlay's
+/// icon (it was a regular app while frozen), about half a second in all (measured on macOS 26).
+const HANDOFF_SETTLE_DOCK: Duration = Duration::from_millis(520);
 /// The frozen screens give way after this at most, whatever came back.
-const HANDOFF_TIMEOUT: Duration = Duration::from_millis(700);
+const HANDOFF_TIMEOUT: Duration = Duration::from_millis(1000);
 /// Shown, the frozen screens take the system after this at most, on screen or not.
 const TAKEOVER_TIMEOUT: Duration = Duration::from_millis(200);
 
@@ -36,6 +37,14 @@ const TAKEOVER_TIMEOUT: Duration = Duration::from_millis(200);
 pub struct Handoff {
     since: Instant,
     back: Option<Instant>,
+    /// The live toolbar shows, over the frozen screens, which show just the screen now.
+    swapped: bool,
+}
+
+impl Handoff {
+    pub fn swapped(&self) -> bool {
+        self.swapped
+    }
 }
 
 /// The screen (index into the spec's) under the pointer.
@@ -289,24 +298,63 @@ fn take_over(overlay: &Entity<Overlay>, since: Instant, cx: &mut AsyncApp) -> an
     cx.update(|cx| overlay.update(cx, |o, _| o.taking_over = None))
 }
 
-/// The live toolbar, drawn at its size, in place of the frozen screens, once the system is back
-/// with the app the user was in (`handed_back`).
+/// The live toolbar, drawn at its size, in place of the frozen screens. From frozen, it shows at
+/// once, above them (they show just the screen now, as it was), and they give way once the system
+/// is back with the app the user was in (`handed_back`): with the Dock always shown, that's about
+/// half a second, which the user doesn't wait on to see ▶ worked.
 fn show_live(overlay: &Entity<Overlay>, cx: &mut AsyncApp) -> anyhow::Result<()> {
-    let (screens, toolbar, frozen) = cx.update(|cx| {
+    let (screens, toolbar, frozen, started) = cx.update(|cx| {
         let o = overlay.read(cx);
         let views: Vec<usize> = o.windows.iter().map(|w| w.view).collect();
-        (views, o.toolbar_window.as_ref().map(|t| t.view), o.shown == Some(false))
+        (views, o.toolbar_window.as_ref().map(|t| t.view), o.shown == Some(false), o.handoff.is_some())
     })?;
-    if frozen && !handed_back(overlay, cx)? {
-        return Ok(());
-    }
-    if let Some(toolbar) = toolbar {
+    // Drawn while hidden, the toolbar knows its size: the window fits it, and it's drawn again.
+    let prepare_toolbar = |cx: &mut AsyncApp| -> anyhow::Result<()> {
+        let Some(toolbar) = toolbar else { return Ok(()) };
         native::pointer_moved(toolbar);
         native::draw_now(&[toolbar]);
-        // Drawn, the toolbar knows its size: the window fits it, and it's drawn again at that size.
         follow_toolbar(overlay, cx)?;
         native::draw_now(&[toolbar]);
-        native::show(toolbar, false);
+        Ok(())
+    };
+    let show_toolbar = || {
+        if let Some(toolbar) = toolbar {
+            native::show(toolbar, false);
+        }
+    };
+    if frozen {
+        if !started {
+            // At once, while the overlay's app is still the active one (drawn once it's in the
+            // background, the frozen screens didn't show it): they show just the screen
+            // (`ScreenView`), under the live toolbar; then the system goes back to the user's app.
+            cx.update(|cx| {
+                overlay.update(cx, |o, cx| {
+                    o.handoff = Some(Handoff { since: Instant::now(), back: None, swapped: true });
+                    cx.notify();
+                })
+            })?;
+            // In one redraw of the frozen screens, their toolbar goes and the live one shows, where
+            // its window is: shown under them meanwhile, it's there when they go. (Ordering a window
+            // in and drawing another don't reach the screen in the same frame.)
+            prepare_toolbar(cx)?;
+            let frame = toolbar.and_then(native::frame);
+            cx.update(|cx| {
+                overlay.update(cx, |o, cx| {
+                    o.handoff = Some(Handoff { since: Instant::now(), back: None, swapped: true });
+                    o.live_toolbar_frame = frame;
+                    cx.notify();
+                })
+            })?;
+            native::draw_now(&screens);
+            show_toolbar();
+            return begin_handoff(overlay, cx);
+        }
+        if !handed_back(overlay, cx)? {
+            return Ok(());
+        }
+    } else {
+        prepare_toolbar(cx)?;
+        show_toolbar();
     }
     for view in screens {
         native::hide(view);
@@ -315,8 +363,25 @@ fn show_live(overlay: &Entity<Overlay>, cx: &mut AsyncApp) -> anyhow::Result<()>
         overlay.update(cx, |o, _| {
             o.shown = Some(true);
             o.handoff = None;
+            o.live_toolbar_frame = None;
         })
     })
+}
+
+/// The system goes back to the app the user was in (the keyboard, the Dock and the menu bar), and
+/// the overlay's app is an accessory again.
+fn begin_handoff(overlay: &Entity<Overlay>, cx: &mut AsyncApp) -> anyhow::Result<()> {
+    let previous = cx.update(|cx| {
+        overlay.update(cx, |o, _| {
+            let swapped = o.handoff.as_ref().is_some_and(|h| h.swapped);
+            o.handoff = Some(Handoff { since: Instant::now(), back: None, swapped });
+            o.taking_over = None;
+            o.previous_app
+        })
+    })?;
+    native::kiosk(false);
+    native::give_focus(previous);
+    Ok(())
 }
 
 /// Whether the frozen screens can give way: the first time, the system goes back to the app the
@@ -324,21 +389,14 @@ fn show_live(overlay: &Entity<Overlay>, cx: &mut AsyncApp) -> anyhow::Result<()>
 /// Dock and the menu bar where they were, and had a moment to draw itself as the active app. Until
 /// then the frozen screens cover it all, so the user sees their app as they left it, at once.
 fn handed_back(overlay: &Entity<Overlay>, cx: &mut AsyncApp) -> anyhow::Result<bool> {
-    let (previous, started, back, frames, visible) = cx.update(|cx| {
+    let (started, back, frames, visible) = cx.update(|cx| {
         let o = overlay.read(cx);
         let frames: Vec<PtRect> = o.spec().screens.iter().map(|s| s.frame).collect();
         let (started, back) = o.handoff.as_ref().map_or((None, None), |h| (Some(h.since), h.back));
-        (o.previous_app, started, back, frames, o.visible.clone())
+        (started, back, frames, o.visible.clone())
     })?;
     let Some(since) = started else {
-        native::give_focus(previous);
-        native::kiosk(false);
-        cx.update(|cx| {
-            overlay.update(cx, |o, _| {
-                o.handoff = Some(Handoff { since: Instant::now(), back: None });
-                o.taking_over = None;
-            })
-        })?;
+        begin_handoff(overlay, cx)?;
         return Ok(false);
     };
     if since.elapsed() >= HANDOFF_TIMEOUT {

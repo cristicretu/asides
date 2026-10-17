@@ -113,6 +113,7 @@ fn headless(dir: &Path, spec: &Spec, frames: Vec<Frame>, script: &Script) -> any
 fn gui(dir: PathBuf, spec: Spec, frames: Vec<Frame>) {
     // The app the user is in, before the overlay's takes over.
     let previous = native::front_app();
+    native::stay_accessory_at_launch();
     Application::new().with_assets(assets::Assets).run(move |cx: &mut App| {
         native::accessory();
         input::bind_keys(cx);
