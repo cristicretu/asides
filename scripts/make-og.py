@@ -29,15 +29,15 @@ def replace(text, old, new):
     return text.replace(old, new, 1)
 
 
-# The frame: testing the checkout page in Safari, seven seconds into a recording, one screenshot in.
-words = "The summary card needs more padding under the sticky header."
-device = replace(device, '<div class="desk" data-app="textedit"', '<div class="desk" data-app="safari"')
+# The frame: testing the checkout page in Safari, the screen frozen under Asides' toolbar, seven
+# seconds into talking.
+words = "The summary card is jammed under the header."
+device = replace(device, '<div class="desk" data-app="textedit"', '<div class="desk frozen" data-app="safari"')
 device = replace(device, '<div class="win safari inactive">', '<div class="win safari">')
 device = replace(device, '<div class="win editor open">', '<div class="win editor">')
-device = replace(device, '<span class="status" data-state="idle">', '<span class="status" data-state="rec">')
-device = replace(device, '<span class="status-title"></span>', '<span class="status-title">0:07 · 📎1</span>')
-device = replace(device, '<span class="mic-on" hidden></span>', '<span class="mic-on"></span>')
-device = replace(device, '<div class="pointer">', '<div class="pointer on" style="--x: 640; --y: 488">')
+device = replace(device, '<span class="tb tb-mic">', '<span class="tb tb-mic rec">')
+device = replace(device, '<span class="tb-time"></span>', '<span class="tb-time">0:07</span>')
+device = replace(device, '<div class="pointer">', '<div class="pointer on crosshair" style="--x: 1000; --y: 250">')
 device = replace(device, '<p class="say" aria-live="polite"></p>', f'<p class="say">{words}</p>')
 
 html = f"""<!doctype html>
