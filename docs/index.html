@@ -5,9 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>asides · Report bugs out loud while you test</title>
 <meta name="description" content="A macOS menu-bar app. Press a shortcut, say what's wrong, and it's transcribed on your Mac into a Markdown note in your repo, screenshots inline, and handed straight to your coding agent.">
-<meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0b0c">
 <link rel="canonical" href="https://asides.mihaicristian.dev/">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="wallpaper.webp" as="image" type="image/webp">
@@ -20,26 +19,18 @@
 <script>document.documentElement.classList.add('js');</script>
 <style>
 :root {
-  --bg: #fff;
-  --fg: #111113;
-  --muted: #6e6e73;
-  --line: #e8e8ec;
-  --code-bg: #f4f4f6;
+  /* Always dark, whatever the system's appearance. */
+  --bg: #0b0b0c;
+  --fg: #f2f2f4;
+  --muted: #98989f;
+  --line: #232326;
+  --code-bg: #161618;
   /* The recording dot: the page's one color. */
-  --red: #ff3b30;
+  --red: #ff453a;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0b0b0c;
-    --fg: #f2f2f4;
-    --muted: #98989f;
-    --line: #232326;
-    --code-bg: #161618;
-    --red: #ff453a;
-  }
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
